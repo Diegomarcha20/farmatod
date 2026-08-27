@@ -61,7 +61,6 @@ import json
 import logging
 import os
 import random
-import time
 import uuid
 from dataclasses import dataclass
 from decimal import Decimal
@@ -122,26 +121,14 @@ class TiendaObjetivo:
     city_id: str = "SNCR"
 
 
-class _CachePorTermino:
-    """Caché en memoria, con expiración, del último resultado exitoso
-    por término de búsqueda. Es el "dato en caché" que el spec pide
-    devolver cuando el scraping en vivo falla."""
-
-    def __init__(self, ttl_segundos: int = 1800) -> None:
-        self._ttl = ttl_segundos
-        self._datos: dict[str, tuple[float, dict[str, Any]]] = {}
-
-    def obtener(self, clave: str) -> Optional[dict[str, Any]]:
-        entrada = self._datos.get(clave)
-        if entrada is None:
-            return None
-        guardado_en, valor = entrada
-        if time.monotonic() - guardado_en > self._ttl:
-            return None
-        return valor
-
-    def guardar(self, clave: str, valor: dict[str, Any]) -> None:
-        self._datos[clave] = (time.monotonic(), valor)
+# Caché de búsquedas a nivel de MÓDULO (no de instancia): cada llamada
+# a `buscar_catalogo_real`/`buscar_producto` crea y descarta su propia
+# instancia de `FarmatodoScraper` (es un cliente HTTP de usar y tirar),
+# así que si el caché viviera dentro de la instancia, se vaciaría en
+# cada request y jamás serviría para nada -este es el "dato en caché"
+# que se usa cuando el scraping en vivo falla-.
+CACHE_BUSQUEDAS_TTL_SEGUNDOS = int(os.getenv("CACHE_FARMATODO_TTL_SEGUNDOS", "1800"))
+_cache_busquedas = TTLCache(ttl_segundos=CACHE_BUSQUEDAS_TTL_SEGUNDOS)
 
 
 class FarmatodoScraper:
@@ -151,13 +138,12 @@ class FarmatodoScraper:
         timeout_segundos: float = 10.0,
         max_reintentos: int = 3,
         backoff_base_segundos: float = 0.6,
-        cache_ttl_segundos: int = 1800,
     ) -> None:
         self._tienda = tienda
         self._timeout = timeout_segundos
         self._max_reintentos = max_reintentos
         self._backoff_base = backoff_base_segundos
-        self._cache = _CachePorTermino(ttl_segundos=cache_ttl_segundos)
+        self._cache = _cache_busquedas
         self._client: Optional[httpx.AsyncClient] = None
 
     async def __aenter__(self) -> "FarmatodoScraper":
@@ -245,10 +231,13 @@ class FarmatodoScraper:
             "Accept-Language": "es-VE,es;q=0.9",
         }
 
-    def _cuerpo_algolia(self, termino: str) -> dict[str, Any]:
+    def _cuerpo_algolia(self, termino: str, hits_por_pagina: int = 50) -> dict[str, Any]:
         params = urlencode(
             {
-                "hitsPerPage": 5,
+                # Deliberadamente alto: la meta es "todas las coincidencias
+                # razonables", no una sola sugerencia. Un término de
+                # farmacia específico rara vez supera esto en la práctica.
+                "hitsPerPage": hits_por_pagina,
                 "page": 0,
                 "filters": "outofstore:false ",
                 "clickAnalytics": "true",
@@ -265,7 +254,9 @@ class FarmatodoScraper:
             ]
         }
 
-    async def _buscar_en_algolia(self, termino: str) -> Optional[dict[str, Any]]:
+    async def _buscar_todos_en_algolia(self, termino: str) -> list[dict[str, Any]]:
+        """Devuelve TODOS los resultados de Algolia para `termino` (hasta
+        el límite generoso de `_cuerpo_algolia`), no solo el primero."""
         respuesta = await self._solicitar_con_reintentos(
             "POST",
             ALGOLIA_SEARCH_URL,
@@ -275,11 +266,12 @@ class FarmatodoScraper:
         cuerpo = respuesta.json()
         resultados = cuerpo.get("results") or []
         if not resultados:
-            return None
-        hits = resultados[0].get("hits") or []
-        if not hits:
-            return None
-        return hits[0]
+            return []
+        return resultados[0].get("hits") or []
+
+    async def _buscar_en_algolia(self, termino: str) -> Optional[dict[str, Any]]:
+        hits = await self._buscar_todos_en_algolia(termino)
+        return hits[0] if hits else None
 
     async def _ficha_ssr(self, url_slug: str) -> Optional[dict[str, Any]]:
         """Segunda fuente, opcional y no bloqueante: intenta leer el
@@ -331,6 +323,128 @@ class FarmatodoScraper:
         if partes and partes[0].isdigit():
             partes = partes[1:]
         return " ".join(partes).strip().capitalize() or url_slug
+
+    def _laboratorio_desde_hit(self, hit: dict[str, Any]) -> Optional[str]:
+        """El campo `brand` de Algolia a veces es un nombre de marca
+        limpio ("Calox") y a veces un código interno de proveedor
+        ("2008M-0008623"). Se descarta cuando parece un código (trae
+        dígitos mezclados con guiones) para no mostrar basura como
+        "laboratorio"; en ese caso, `_ficha_ssr` puede dar un nombre
+        más limpio vía `brand.name` del JSON-LD."""
+        marca = (hit.get("brand") or "").strip()
+        if not marca:
+            return None
+        tiene_digito = any(c.isdigit() for c in marca)
+        parece_codigo = tiene_digito and ("-" in marca or marca.isupper() and len(marca) > 10)
+        return None if parece_codigo else marca
+
+    async def _construir_candidato(
+        self, hit: dict[str, Any], tasas: TasasConfiguracion, con_ficha_ssr: bool = False
+    ) -> dict[str, Any]:
+        """Construye el dict de un producto candidato a partir de un
+        hit de Algolia, SIN decidir todavía si es la única respuesta o
+        una entre varias opciones -eso lo decide el llamador según
+        cuántos candidatos hay en total-."""
+        sku = str(hit.get("item") or hit.get("objectID") or hit.get("sku_searchable") or "")
+        url_slug = hit.get("url") or ""
+        en_stock = self._en_stock_para_tienda(hit)
+        precio_bs = self._precio_bs_para_tienda(hit)
+
+        nombre_comercial = self._nombre_desde_slug(url_slug) if url_slug else sku
+        imagen_url = hit.get("mediaImageUrl") or next(iter(hit.get("listUrlImages") or []), None)
+        laboratorio = self._laboratorio_desde_hit(hit)
+        principio_activo = hit.get("activePrinciple")
+
+        if con_ficha_ssr and url_slug:
+            ficha = await self._ficha_ssr(url_slug)
+            if ficha:
+                oferta = ficha.get("offers") or {}
+                nombre_comercial = (ficha.get("name") or nombre_comercial).strip()
+                imagen_url = ficha.get("image") or imagen_url
+                marca_ssr = (ficha.get("brand") or {}).get("name") if isinstance(ficha.get("brand"), dict) else None
+                laboratorio = marca_ssr or laboratorio
+                if not precio_bs and oferta.get("price"):
+                    precio_bs = Decimal(str(oferta["price"]))
+
+        return {
+            "sku": sku,
+            "nombre_comercial": nombre_comercial,
+            "principio_activo": principio_activo,
+            "laboratorio": laboratorio,
+            "disponibilidad": {
+                "tienda": self._tienda.nombre_visible,
+                "en_stock": en_stock,
+                "cantidad_aproximada": self._cantidad_aproximada(hit, en_stock),
+            },
+            "precios": calcular_precios(precio_bs, tasas),
+            "imagen_url": imagen_url,
+        }
+
+    async def buscar_catalogo(self, termino: str, tasas: TasasConfiguracion) -> dict[str, Any]:
+        """Punto de entrada para búsqueda AMPLIA: devuelve TODOS los
+        candidatos que Farmatodo tenga para `termino` (nombre completo
+        o parcial, principio activo, o código de barras -Algolia
+        también indexa `barcode`/`barcodeList`-), cada uno ya con
+        precio/disponibilidad/foto para la tienda configurada.
+
+        Si hay exactamente un candidato, se enriquece además con la
+        ficha SSR (nombre y laboratorio más limpios). Si hay varios, se
+        listan todos sin ese paso extra (evita N peticiones adicionales
+        por cada búsqueda ambigua).
+
+        Sirve desde caché (TTL configurable, 30 min por defecto) si el
+        mismo término ya se buscó recientemente -evita golpear a
+        Farmatodo de nuevo por cada búsqueda repetida-, y cae a ese
+        mismo caché si la consulta en vivo falla y no hay nada más
+        reciente. Nunca lanza una excepción: ante cualquier fallo
+        devuelve una lista vacía con el motivo en `meta`."""
+        clave_cache = termino.strip().lower()
+
+        cacheado = self._cache.obtener(clave_cache)
+        if cacheado is not None:
+            logger.info("scraper_service: acierto de caché para %r.", clave_cache)
+            return {**cacheado, "meta": {**cacheado["meta"], "desde_cache": True}}
+
+        try:
+            hits = await self._buscar_todos_en_algolia(termino)
+        except Exception as exc:  # noqa: BLE001 - cualquier fallo de red/API cae a error, nunca rompe /buscar
+            logger.warning("Fallo consultando el catálogo de Farmatodo para %r: %s", termino, exc)
+            return {
+                "candidatos": [],
+                "meta": {"fuente": "error", "advertencia": f"No se pudo consultar Farmatodo: {exc}", "desde_cache": False},
+            }
+
+        if not hits:
+            # No se cachea "no encontrado": si Farmatodo agrega el
+            # producto después, no queremos quedar pegados a un "no
+            # encontrado" viejo por hasta 30 minutos.
+            return {
+                "candidatos": [],
+                "meta": {
+                    "fuente": "no_encontrado",
+                    "advertencia": f"Sin coincidencias para '{termino}'.",
+                    "desde_cache": False,
+                },
+            }
+
+        try:
+            es_candidato_unico = len(hits) == 1
+            candidatos = await asyncio.gather(
+                *(self._construir_candidato(hit, tasas, con_ficha_ssr=es_candidato_unico) for hit in hits)
+            )
+        except Exception as exc:  # noqa: BLE001 - error de parseo/estructura inesperada
+            logger.warning("Fallo interpretando el catálogo de Farmatodo para %r: %s", termino, exc)
+            return {
+                "candidatos": [],
+                "meta": {"fuente": "error", "advertencia": f"Respuesta inesperada de Farmatodo: {exc}", "desde_cache": False},
+            }
+
+        resultado = {
+            "candidatos": list(candidatos),
+            "meta": {"fuente": "scraping_real", "advertencia": None, "desde_cache": False},
+        }
+        self._cache.guardar(clave_cache, resultado)
+        return resultado
 
     async def _construir_resultado(self, hit: dict[str, Any], tasas: TasasConfiguracion) -> dict[str, Any]:
         sku = str(hit.get("item") or hit.get("objectID") or hit.get("sku_searchable") or "")
@@ -452,6 +566,27 @@ class FarmatodoScraper:
 
 
 # --------------------------------------------------------------------------
+# Punto de entrada usado por /buscar: TODO el catálogo sale de Farmatodo
+# en tiempo real -no hay catálogo local propio-, así que cualquier
+# búsqueda (nombre completo o parcial, código de barras, o principio
+# activo resuelto por IA) pasa por aquí.
+# --------------------------------------------------------------------------
+
+
+async def buscar_catalogo_real(
+    termino: str,
+    tasas: TasasConfiguracion,
+    tienda: TiendaObjetivo = TiendaObjetivo(),
+) -> dict[str, Any]:
+    """Envoltorio de conveniencia sobre `FarmatodoScraper.buscar_catalogo`:
+    abre y cierra el cliente HTTP por llamada. Nunca lanza una
+    excepción -ver `buscar_catalogo` para el detalle de la
+    resiliencia-."""
+    async with FarmatodoScraper(tienda=tienda) as scraper:
+        return await scraper.buscar_catalogo(termino, tasas)
+
+
+# --------------------------------------------------------------------------
 # Enriquecimiento de fotos para OTROS catálogos (p. ej. el demo local de la
 # farmacia): busca `termino` en el catálogo real de Farmatodo y devuelve
 # solo una foto de referencia, sin acoplar stock/precio -esos siguen
@@ -511,3 +646,9 @@ async def obtener_imagenes_productos(terminos: list[str]) -> dict[str, Optional[
 
     resultados = await asyncio.gather(*(obtener_imagen_producto(t) for t in terminos_unicos))
     return dict(zip(terminos_unicos, resultados))
+
+
+def estadisticas_cache() -> dict:
+    """Expone aciertos/fallos del caché de búsquedas al catálogo real
+    de Farmatodo (para /cache/estadisticas)."""
+    return _cache_busquedas.estadisticas()

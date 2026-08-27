@@ -11,10 +11,10 @@ import '../services/local_cache_service.dart';
 import '../widgets/legal_footer.dart';
 import '../widgets/product_card.dart';
 
-/// Pantalla de resultado: integra la ficha médica (IA/base local), el
-/// SKU y la ubicación en el planograma, la disponibilidad obtenida por
-/// scraping en la sucursal, y -si no hay stock- las alternativas
-/// terapéuticas con el mismo principio activo.
+/// Pantalla de resultado: integra la ficha médica (catálogo real de
+/// Farmatodo + IA), el SKU, precio multidivisa y disponibilidad real
+/// en la sucursal, y -si no hay stock- las alternativas terapéuticas
+/// con el mismo principio activo.
 class ResultScreen extends StatelessWidget {
   const ResultScreen({super.key});
 
@@ -115,7 +115,7 @@ class _CargandoViewState extends State<_CargandoView> {
             _esperaLarga
                 ? 'Esto puede tardar un poco más si el servidor estaba '
                     'dormido — no cierres la app.'
-                : 'Consultando stock y alternativas...',
+                : 'Consultando el catálogo de Farmatodo...',
             textAlign: TextAlign.center,
             style: GoogleFonts.inter(
               fontSize: 13,
@@ -226,8 +226,8 @@ class _NoEncontradoView extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               mensaje ??
-                  'No encontramos el medicamento ni alternativas por '
-                      'principio activo para esta búsqueda.',
+                  'No encontramos el medicamento en el catálogo de '
+                      'Farmatodo para esta búsqueda.',
               textAlign: TextAlign.center,
               style: GoogleFonts.inter(
                 fontSize: 13.5,
@@ -243,9 +243,9 @@ class _NoEncontradoView extends StatelessWidget {
 }
 
 /// Varias coincidencias posibles (por nombre, principio activo o
-/// síntoma): se muestran como una lista para elegir, en vez de
-/// adivinar una. Tocar una opción dispara una nueva búsqueda por su
-/// SKU exacto -así sí trae disponibilidad real y alternativas-.
+/// síntoma): se muestran TODAS -sin límite- como una lista para
+/// elegir, en vez de adivinar una. Tocar una opción dispara una nueva
+/// búsqueda por su nombre exacto -así sí trae alternativas si aplica-.
 class _OpcionesView extends StatelessWidget {
   const _OpcionesView({required this.data});
 
@@ -279,7 +279,7 @@ class _OpcionesView extends StatelessWidget {
             padding: const EdgeInsets.only(bottom: 12),
             child: ProductCard(
               producto: opcion,
-              onTap: () => context.read<SearchProvider>().buscar(opcion.sku),
+              onTap: () => context.read<SearchProvider>().buscar(opcion.nombre),
             ),
           ),
         ),
@@ -296,7 +296,6 @@ class _ResultadoEncontrado extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final producto = data.producto!;
-    final hayStock = data.stockEfectivo > 0;
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -305,10 +304,7 @@ class _ResultadoEncontrado extends StatelessWidget {
         _FichaMedicaCard(producto: producto, data: data),
         const SizedBox(height: 14),
         _SkuUbicacionCard(producto: producto),
-        const SizedBox(height: 14),
-        if (data.infoSucursal != null)
-          _SucursalCard(info: data.infoSucursal!, producto: producto),
-        if (!hayStock) ...[
+        if (!producto.enStock) ...[
           const SizedBox(height: 26),
           Row(
             children: [
@@ -355,10 +351,9 @@ class _ResultadoEncontrado extends StatelessWidget {
 }
 
 /// Resultado servido desde el caché local (SQLite) cuando no hay
-/// conexión con el backend. Muestra SKU y ubicación en el planograma
-/// -lo único que sigue siendo confiable sin red-, y reemplaza la
-/// sección de IA/disponibilidad en vivo por un aviso claro en vez de
-/// simular datos que podrían estar desactualizados.
+/// conexión con el backend. Muestra lo último que se sabía del
+/// producto -nunca disponibilidad en vivo, eso solo tiene sentido
+/// consultado en el momento- con un aviso claro de que está desfasado.
 class _ResultadoOffline extends StatelessWidget {
   const _ResultadoOffline({required this.cacheado});
 
@@ -402,14 +397,15 @@ class _ResultadoOffline extends StatelessWidget {
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    _Etiqueta(texto: producto.principioActivo, icono: Icons.science_outlined),
-                    if (producto.categoria != null)
-                      _Etiqueta(texto: producto.categoria!, icono: Icons.category_outlined),
+                    if (producto.principioActivo != null)
+                      _Etiqueta(texto: producto.principioActivo!, icono: Icons.science_outlined),
+                    if (producto.laboratorio != null)
+                      _Etiqueta(texto: producto.laboratorio!, icono: Icons.factory_outlined),
                   ],
                 ),
                 const SizedBox(height: 14),
                 Text(
-                  '\$${producto.precio.toStringAsFixed(2)}',
+                  'Bs. ${producto.precioBs.toStringAsFixed(2)}',
                   style: GoogleFonts.inter(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
@@ -417,7 +413,9 @@ class _ResultadoOffline extends StatelessWidget {
                   ),
                 ),
                 Text(
-                  'Último stock registrado: ${producto.stock} uds. (no en tiempo real)',
+                  'Último estado registrado: '
+                  '${producto.enStock ? producto.cantidadAproximada : "Agotado"} '
+                  '(no en tiempo real)',
                   style: GoogleFonts.inter(
                     fontSize: 12,
                     color: AppColors.primary.withValues(alpha: 0.55),
@@ -496,8 +494,8 @@ class _AvisoSinConexion extends StatelessWidget {
   }
 }
 
-/// "Ficha Médica": combina lo que sabe la base local con lo detectado
-/// por IA (principio activo, categoría terapéutica y descripción).
+/// "Ficha Médica": producto real de Farmatodo, con lo que Gemini haya
+/// completado (descripción, país del laboratorio) cuando faltaba.
 class _FichaMedicaCard extends StatelessWidget {
   const _FichaMedicaCard({required this.producto, required this.data});
 
@@ -563,29 +561,13 @@ class _FichaMedicaCard extends StatelessWidget {
                 ProductoImagen(url: producto.imagenUrl, tamano: 88),
                 const SizedBox(width: 14),
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        producto.nombre,
-                        style: GoogleFonts.inter(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w800,
-                          color: AppColors.primary,
-                        ),
-                      ),
-                      if (producto.imagenReferencial) ...[
-                        const SizedBox(height: 4),
-                        Text(
-                          'Foto de referencia (catálogo de Farmatodo)',
-                          style: GoogleFonts.inter(
-                            fontSize: 11,
-                            fontStyle: FontStyle.italic,
-                            color: AppColors.primary.withValues(alpha: 0.5),
-                          ),
-                        ),
-                      ],
-                    ],
+                  child: Text(
+                    producto.nombre,
+                    style: GoogleFonts.inter(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.primary,
+                    ),
                   ),
                 ),
               ],
@@ -595,12 +577,13 @@ class _FichaMedicaCard extends StatelessWidget {
               spacing: 8,
               runSpacing: 8,
               children: [
-                _Etiqueta(texto: producto.principioActivo, icono: Icons.science_outlined),
+                if (producto.principioActivo != null)
+                  _Etiqueta(texto: producto.principioActivo!, icono: Icons.science_outlined),
                 if (producto.categoria != null)
                   _Etiqueta(texto: producto.categoria!, icono: Icons.category_outlined),
                 if (producto.laboratorio != null)
                   _Etiqueta(texto: producto.laboratorio!, icono: Icons.factory_outlined),
-                StockBadge(stock: producto.stock),
+                StockBadge(enStock: producto.enStock, cantidadAproximada: producto.cantidadAproximada),
               ],
             ),
             if (producto.descripcion != null) ...[
@@ -637,11 +620,20 @@ class _FichaMedicaCard extends StatelessWidget {
             ],
             const SizedBox(height: 14),
             Text(
-              '\$${producto.precio.toStringAsFixed(2)}',
+              'Bs. ${producto.precioBs.toStringAsFixed(2)}',
               style: GoogleFonts.inter(
-                fontSize: 20,
+                fontSize: 22,
                 fontWeight: FontWeight.w800,
                 color: AppColors.primary,
+              ),
+            ),
+            const SizedBox(height: 2),
+            Text(
+              '≈ \$${producto.precioUsd.toStringAsFixed(2)} USD (con IGTF)  ·  '
+              '≈ ${producto.precioCop.toStringAsFixed(0)} COP (con IGTF)',
+              style: GoogleFonts.inter(
+                fontSize: 12,
+                color: AppColors.primary.withValues(alpha: 0.55),
               ),
             ),
           ],
@@ -685,7 +677,10 @@ class _Etiqueta extends StatelessWidget {
   }
 }
 
-/// SKU y ubicación exacta en el planograma de la sucursal.
+/// SKU y ubicación en el planograma, cuando se conoce. Farmatodo no
+/// expone el layout físico de una tienda de terceros, así que casi
+/// siempre se muestra "No registrada" -queda el campo listo para el
+/// día que haya una forma de asociar SKU a estante propio-.
 class _SkuUbicacionCard extends StatelessWidget {
   const _SkuUbicacionCard({required this.producto});
 
@@ -711,7 +706,8 @@ class _SkuUbicacionCard extends StatelessWidget {
               child: _DatoUbicacion(
                 icono: Icons.place_outlined,
                 etiqueta: 'UBICACIÓN EN PLANOGRAMA',
-                valor: producto.ubicacionPlanograma,
+                valor: producto.ubicacionPlanograma ?? 'No registrada',
+                atenuado: producto.ubicacionPlanograma == null,
               ),
             ),
           ],
@@ -726,11 +722,13 @@ class _DatoUbicacion extends StatelessWidget {
     required this.icono,
     required this.etiqueta,
     required this.valor,
+    this.atenuado = false,
   });
 
   final IconData icono;
   final String etiqueta;
   final String valor;
+  final bool atenuado;
 
   @override
   Widget build(BuildContext context) {
@@ -758,95 +756,11 @@ class _DatoUbicacion extends StatelessWidget {
           style: GoogleFonts.inter(
             fontSize: 14,
             fontWeight: FontWeight.w700,
-            color: AppColors.primary,
+            fontStyle: atenuado ? FontStyle.italic : FontStyle.normal,
+            color: atenuado ? AppColors.primary.withValues(alpha: 0.4) : AppColors.primary,
           ),
         ),
       ],
-    );
-  }
-}
-
-/// Disponibilidad obtenida por scraping en la sucursal (imagen,
-/// cantidad y si la fuente fue real o simulada por caída del sitio).
-class _SucursalCard extends StatelessWidget {
-  const _SucursalCard({required this.info, required this.producto});
-
-  final InfoSucursal info;
-  final Producto producto;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Container(
-                width: 56,
-                height: 56,
-                color: AppColors.fondo,
-                child: info.imagenUrl == null
-                    ? Icon(Icons.storefront_outlined, color: AppColors.primary.withValues(alpha: 0.35))
-                    : Image.network(
-                        info.imagenUrl!,
-                        fit: BoxFit.cover,
-                        errorBuilder: (context, error, stackTrace) => Icon(
-                          Icons.storefront_outlined,
-                          color: AppColors.primary.withValues(alpha: 0.35),
-                        ),
-                      ),
-              ),
-            ),
-            const SizedBox(width: 14),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          info.sucursal,
-                          style: GoogleFonts.inter(
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.primary,
-                          ),
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      if (info.fuente == 'simulado')
-                        Tooltip(
-                          message: 'Sitio de la sucursal no disponible; '
-                              'se muestra un estimado de referencia.',
-                          child: Icon(
-                            Icons.info_outline,
-                            size: 14,
-                            color: AppColors.primary.withValues(alpha: 0.4),
-                          ),
-                        ),
-                    ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Disponibilidad en sucursal (web)',
-                    style: GoogleFonts.inter(
-                      fontSize: 11.5,
-                      color: AppColors.primary.withValues(alpha: 0.5),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  StockBadge(stock: info.disponible ? info.cantidad : 0),
-                ],
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }

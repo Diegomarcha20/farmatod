@@ -5,11 +5,12 @@ import '../models/producto.dart';
 
 /// Caché local en SQLite (en el propio dispositivo): guarda cada
 /// producto que la app haya podido consultar exitosamente en el
-/// backend, para poder seguir mostrando SKU y ubicación en el
-/// planograma aunque el Wi-Fi de la tienda falle. La disponibilidad
-/// (IA/scraping) NO se cachea aquí a propósito: solo tiene sentido en
-/// tiempo real, así que en modo offline se muestra un aviso en vez de
-/// un dato de stock potencialmente desactualizado.
+/// backend (catálogo real de Farmatodo), para poder seguir mostrando
+/// algo -nombre, precio, laboratorio- aunque no haya conexión. La
+/// disponibilidad real y la ficha ampliada por IA NO se re-consultan
+/// en modo offline: solo tienen sentido en tiempo real, así que se
+/// muestra un aviso claro en vez de un dato potencialmente
+/// desactualizado.
 class LocalCacheService {
   LocalCacheService._interno();
 
@@ -26,45 +27,43 @@ class LocalCacheService {
     final ruta = join(await getDatabasesPath(), 'farmatod_cache.db');
     final db = await openDatabase(
       ruta,
-      version: 3,
+      version: 4,
       onCreate: (db, version) async {
-        await db.execute('''
-          CREATE TABLE $_nombreTabla (
-            sku TEXT PRIMARY KEY,
-            codigo_barras TEXT,
-            nombre TEXT NOT NULL,
-            principio_activo TEXT NOT NULL,
-            categoria TEXT,
-            descripcion TEXT,
-            laboratorio TEXT,
-            pais_origen TEXT,
-            precio REAL NOT NULL,
-            stock INTEGER NOT NULL,
-            ubicacion_planograma TEXT NOT NULL,
-            sucursal TEXT NOT NULL,
-            imagen_url TEXT,
-            imagen_referencial INTEGER NOT NULL DEFAULT 0,
-            guardado_en INTEGER NOT NULL
-          )
-        ''');
-        await db.execute(
-          'CREATE INDEX idx_${_nombreTabla}_codigo_barras ON $_nombreTabla(codigo_barras)',
-        );
+        await _crearTabla(db);
       },
       onUpgrade: (db, oldVersion, newVersion) async {
-        if (oldVersion < 2) {
-          await db.execute(
-            'ALTER TABLE $_nombreTabla ADD COLUMN imagen_referencial INTEGER NOT NULL DEFAULT 0',
-          );
-        }
-        if (oldVersion < 3) {
-          await db.execute('ALTER TABLE $_nombreTabla ADD COLUMN laboratorio TEXT');
-          await db.execute('ALTER TABLE $_nombreTabla ADD COLUMN pais_origen TEXT');
-        }
+        // Es un caché desechable, no un dato con historial que
+        // conservar: ante un cambio de esquema, es más simple y más
+        // seguro recrear la tabla que migrar columna por columna.
+        await db.execute('DROP TABLE IF EXISTS $_nombreTabla');
+        await _crearTabla(db);
       },
     );
     _db = db;
     return db;
+  }
+
+  Future<void> _crearTabla(Database db) async {
+    await db.execute('''
+      CREATE TABLE $_nombreTabla (
+        sku TEXT PRIMARY KEY,
+        nombre TEXT NOT NULL,
+        principio_activo TEXT,
+        categoria TEXT,
+        descripcion TEXT,
+        laboratorio TEXT,
+        pais_origen TEXT,
+        precio_bs REAL NOT NULL,
+        precio_usd REAL NOT NULL,
+        precio_cop REAL NOT NULL,
+        en_stock INTEGER NOT NULL,
+        cantidad_aproximada TEXT,
+        ubicacion_planograma TEXT,
+        sucursal TEXT NOT NULL,
+        imagen_url TEXT,
+        guardado_en INTEGER NOT NULL
+      )
+    ''');
   }
 
   /// Guarda (o reemplaza) un producto en el caché local. Se llama tras
@@ -86,10 +85,9 @@ class LocalCacheService {
     }
   }
 
-  /// Busca en el caché local por SKU exacto, código de barras exacto,
-  /// o coincidencia parcial de nombre/principio activo -el mismo
-  /// criterio flexible que usaría el backend-. Devuelve el más
-  /// reciente si hay varias coincidencias.
+  /// Busca en el caché local por SKU exacto o coincidencia parcial de
+  /// nombre/principio activo. Devuelve el más reciente si hay varias
+  /// coincidencias.
   Future<ProductoCacheado?> buscar(String termino) async {
     final db = await _obtenerDb();
     final terminoLimpio = termino.trim();
@@ -99,7 +97,6 @@ class LocalCacheService {
       '''
       SELECT * FROM $_nombreTabla
       WHERE sku = ?1 COLLATE NOCASE
-         OR codigo_barras = ?1
          OR nombre LIKE '%' || ?1 || '%' COLLATE NOCASE
          OR principio_activo LIKE '%' || ?1 || '%' COLLATE NOCASE
       ORDER BY guardado_en DESC

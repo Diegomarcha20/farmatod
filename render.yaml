@@ -18,5 +18,9 @@ services:
         sync: false
       - key: APP_ACCESS_KEY
         sync: false
+      - key: TASA_USD_BCV
+        sync: false
+      - key: TASA_COP_USD
+        sync: false
       - key: PYTHON_VERSION
         value: 3.12.6

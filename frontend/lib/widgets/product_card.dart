@@ -5,21 +5,30 @@ import '../main.dart';
 import '../models/producto.dart';
 
 /// Badge de disponibilidad: verde (#10B981) si hay stock, rojo
-/// (#EF4444) si está agotado. Reutilizado en la tarjeta de producto y
-/// en la ficha médica del resultado.
+/// (#EF4444) si está agotado. Farmatodo no da una cantidad exacta, así
+/// que se muestra la "cantidad aproximada" que sí reporta ("Disponible",
+/// "Pocas unidades", etc.) en vez de un número inventado. Reutilizado
+/// en la tarjeta de producto y en la ficha médica del resultado.
 class StockBadge extends StatelessWidget {
-  const StockBadge({super.key, required this.stock, this.compacto = false});
+  const StockBadge({
+    super.key,
+    required this.enStock,
+    this.cantidadAproximada,
+    this.compacto = false,
+  });
 
-  final int stock;
+  final bool enStock;
+  final String? cantidadAproximada;
   final bool compacto;
 
   @override
   Widget build(BuildContext context) {
-    final disponible = stock > 0;
-    final color = disponible ? AppColors.stockDisponible : AppColors.stockAgotado;
-    final texto = disponible
-        ? (compacto ? 'En stock' : 'En stock · $stock uds.')
-        : 'Agotado';
+    final color = enStock ? AppColors.stockDisponible : AppColors.stockAgotado;
+    final texto = compacto
+        ? (enStock ? 'En stock' : 'Agotado')
+        : (cantidadAproximada?.isNotEmpty == true
+            ? cantidadAproximada!
+            : (enStock ? 'En stock' : 'Agotado'));
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -50,9 +59,10 @@ class StockBadge extends StatelessWidget {
   }
 }
 
-/// Tarjeta reutilizable para mostrar un producto (resultado principal
-/// o alternativa terapéutica): bordes de 16px, elevación 2 y badge de
-/// stock verde/rojo, según la paleta corporativa.
+/// Tarjeta reutilizable para mostrar un producto (resultado principal,
+/// opción entre varias coincidencias, o alternativa terapéutica):
+/// bordes de 16px, elevación 2 y badge de stock verde/rojo, según la
+/// paleta corporativa.
 class ProductCard extends StatelessWidget {
   const ProductCard({super.key, required this.producto, this.onTap});
 
@@ -61,6 +71,11 @@ class ProductCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final subtitulo = [
+      if (producto.principioActivo != null) producto.principioActivo!,
+      if (producto.laboratorio != null) producto.laboratorio!,
+    ].join(' · ');
+
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -86,18 +101,18 @@ class ProductCard extends StatelessWidget {
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                     ),
-                    const SizedBox(height: 4),
-                    Text(
-                      producto.laboratorio != null
-                          ? '${producto.principioActivo} · ${producto.laboratorio}'
-                          : producto.principioActivo,
-                      style: GoogleFonts.inter(
-                        fontSize: 12.5,
-                        color: AppColors.primary.withValues(alpha: 0.6),
+                    if (subtitulo.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitulo,
+                        style: GoogleFonts.inter(
+                          fontSize: 12.5,
+                          color: AppColors.primary.withValues(alpha: 0.6),
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                    ],
                     const SizedBox(height: 8),
                     Row(
                       children: [
@@ -112,37 +127,51 @@ class ProductCard extends StatelessWidget {
                         ),
                       ],
                     ),
-                    const SizedBox(height: 2),
-                    Row(
-                      children: [
-                        Icon(Icons.place_outlined, size: 14, color: AppColors.primary.withValues(alpha: 0.45)),
-                        const SizedBox(width: 4),
-                        Expanded(
-                          child: Text(
-                            producto.ubicacionPlanograma,
-                            style: GoogleFonts.inter(
-                              fontSize: 12,
-                              color: AppColors.primary.withValues(alpha: 0.55),
+                    if (producto.ubicacionPlanograma != null) ...[
+                      const SizedBox(height: 2),
+                      Row(
+                        children: [
+                          Icon(Icons.place_outlined, size: 14, color: AppColors.primary.withValues(alpha: 0.45)),
+                          const SizedBox(width: 4),
+                          Expanded(
+                            child: Text(
+                              producto.ubicacionPlanograma!,
+                              style: GoogleFonts.inter(
+                                fontSize: 12,
+                                color: AppColors.primary.withValues(alpha: 0.55),
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                             ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
                           ),
-                        ),
-                      ],
-                    ),
+                        ],
+                      ),
+                    ],
                     const SizedBox(height: 10),
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Text(
-                          '\$${producto.precio.toStringAsFixed(2)}',
-                          style: GoogleFonts.inter(
-                            fontSize: 15,
-                            fontWeight: FontWeight.w700,
-                            color: AppColors.primary,
-                          ),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Bs. ${producto.precioBs.toStringAsFixed(2)}',
+                              style: GoogleFonts.inter(
+                                fontSize: 15,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.primary,
+                              ),
+                            ),
+                            Text(
+                              '≈ \$${producto.precioUsd.toStringAsFixed(2)}',
+                              style: GoogleFonts.inter(
+                                fontSize: 11,
+                                color: AppColors.primary.withValues(alpha: 0.5),
+                              ),
+                            ),
+                          ],
                         ),
-                        StockBadge(stock: producto.stock, compacto: true),
+                        StockBadge(enStock: producto.enStock, compacto: true),
                       ],
                     ),
                   ],
