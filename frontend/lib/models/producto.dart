@@ -122,6 +122,12 @@ class BuscarResponse {
   final Producto? producto;
   final InfoSucursal? infoSucursal;
   final String? principioActivoDetectado;
+
+  /// Varias coincidencias posibles (por nombre, principio activo o
+  /// síntoma) cuando ninguna es claramente LA respuesta. Cuando no está
+  /// vacío, `producto` es null: hay que elegir una y volver a buscar
+  /// por su SKU exacto para obtener disponibilidad y precio real.
+  final List<Producto> opciones;
   final List<Producto> alternativas;
   final String? mensaje;
 
@@ -131,6 +137,7 @@ class BuscarResponse {
     this.producto,
     this.infoSucursal,
     this.principioActivoDetectado,
+    this.opciones = const [],
     this.alternativas = const [],
     this.mensaje,
   });
@@ -152,6 +159,9 @@ class BuscarResponse {
           ? InfoSucursal.fromJson(json['info_sucursal'] as Map<String, dynamic>)
           : null,
       principioActivoDetectado: json['principio_activo_detectado'] as String?,
+      opciones: (json['opciones'] as List<dynamic>? ?? [])
+          .map((e) => Producto.fromJson(e as Map<String, dynamic>))
+          .toList(),
       alternativas: (json['alternativas'] as List<dynamic>? ?? [])
           .map((e) => Producto.fromJson(e as Map<String, dynamic>))
           .toList(),

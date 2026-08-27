@@ -1,22 +1,29 @@
 """
 API principal. Expone /buscar, el endpoint central de la app:
 
-1. Busca coincidencia exacta (nombre, SKU o código de barras) en la
-   base local SQLite.
-2. Si no hay coincidencia exacta, usa Gemini para extraer el principio
-   activo de la consulta en lenguaje natural del usuario.
-3. Con el producto (o el principio activo detectado por IA) consulta al
-   scraper la disponibilidad real/simulada en la sucursal
-   "Arbolitos, San Cristóbal" (stock e imagen).
-4. Si el stock resultante es 0, busca y devuelve alternativas
+1. Busca coincidencia EXACTA (nombre, SKU o código de barras) en la
+   base local SQLite. Si hay una, es la respuesta -sin ambigüedad-.
+2. Si no hay coincidencia exacta, busca coincidencias PARCIALES por
+   nombre, principio activo o descripción (p. ej. "Paracetamol" o
+   "alergia" encuentran algo aunque no sea el nombre completo). Esto
+   no depende de IA: es rápido y funciona aunque Gemini falle.
+3. Si tampoco hay ninguna coincidencia parcial, usa Gemini para
+   interpretar la consulta libre (síntoma, descripción vaga) y extraer
+   un principio activo probable, y reintenta la búsqueda parcial con
+   ese principio activo.
+4. Si en cualquiera de los pasos 2-3 hay MÁS DE UNA coincidencia, se
+   devuelven todas como `opciones` para que el usuario elija -en vez de
+   adivinar una-. Si hay exactamente una, se trata igual que una
+   coincidencia exacta (sigue a los pasos 5-6).
+5. Con el producto ya confirmado, consulta al scraper la disponibilidad
+   real/simulada en la sucursal "Arbolitos, San Cristóbal" (stock e
+   imagen). Si el stock resultante es 0, busca y devuelve alternativas
    terapéuticas: otros productos con el mismo principio activo que sí
    tengan stock.
-5. Enriquece el producto principal y cada alternativa con una foto real
-   tomada del catálogo público de Farmatodo Venezuela (vía
-   scraper_service), sin importar si la búsqueda llegó por nombre, SKU,
-   código de barras o principio activo resuelto por IA. Si Farmatodo no
-   responde, cada producto conserva su imagen local sin romper la
-   respuesta.
+6. Enriquece el producto (u opciones) con una foto real tomada del
+   catálogo público de Farmatodo Venezuela (vía scraper_service), sin
+   importar cómo se llegó a la coincidencia. Si Farmatodo no responde,
+   cada producto conserva su imagen local sin romper la respuesta.
 """
 
 import logging
@@ -110,6 +117,13 @@ class BuscarResponse(BaseModel):
     producto: Optional[ProductoOut] = None
     info_sucursal: Optional[InfoSucursalOut] = None
     principio_activo_detectado: Optional[str] = None
+    # Se llena cuando la búsqueda encontró VARIAS coincidencias posibles
+    # (por nombre, principio activo o síntoma) y ninguna es claramente
+    # LA respuesta -el usuario debe elegir una-. Cuando `opciones` no
+    # está vacío, `producto` es null y no hay info_sucursal/alternativas
+    # todavía (eso se resuelve en una segunda búsqueda, por el SKU
+    # exacto de la opción elegida).
+    opciones: List[ProductoOut] = []
     alternativas: List[ProductoOut] = []
     mensaje: Optional[str] = None
 
@@ -158,6 +172,28 @@ def obtener_producto(sku: str, db: Session = Depends(get_db)) -> Producto:
     return producto
 
 
+def _buscar_candidatos(db: Session, termino: str) -> List[Producto]:
+    """Coincidencias PARCIALES por nombre, principio activo o
+    descripción (case-insensitive, substring) -esto es lo que permite
+    encontrar "Paracetamol" sin escribir el nombre completo, o
+    "alergia" si esa palabra aparece en alguna descripción-, sin pasar
+    por IA para nada."""
+    termino_norm = termino.strip().lower()
+    if not termino_norm:
+        return []
+    patron = f"%{termino_norm}%"
+    return (
+        db.query(Producto)
+        .filter(
+            func.lower(Producto.nombre).like(patron)
+            | func.lower(Producto.principio_activo).like(patron)
+            | func.lower(Producto.descripcion).like(patron)
+        )
+        .order_by(Producto.nombre)
+        .all()
+    )
+
+
 def _buscar_alternativas(
     db: Session, principio_activo: str, sku_excluir: Optional[str]
 ) -> List[Producto]:
@@ -170,20 +206,21 @@ def _buscar_alternativas(
     return query.order_by(Producto.stock.desc()).all()
 
 
-async def _enriquecer_con_fotos_reales(
-    producto_out: ProductoOut, alternativas_out: List[ProductoOut]
-) -> tuple[ProductoOut, List[ProductoOut]]:
+async def _enriquecer_lista_con_fotos_reales(productos_out: List[ProductoOut]) -> List[ProductoOut]:
     """Sustituye `imagen_url` por una foto real de Farmatodo cuando se
-    encuentra una, buscando el producto principal y todas las
-    alternativas EN PARALELO (una sola espera de red, no una por
-    producto). Ante cualquier fallo, devuelve los productos sin tocar:
-    esto es un enriquecimiento visual, nunca debe romper /buscar."""
+    encuentra una, buscando TODOS los productos de la lista EN
+    PARALELO (una sola espera de red, no una por producto). Ante
+    cualquier fallo, devuelve los productos sin tocar: esto es un
+    enriquecimiento visual, nunca debe romper /buscar."""
+    if not productos_out:
+        return productos_out
+
     try:
-        nombres = [producto_out.nombre] + [a.nombre for a in alternativas_out]
+        nombres = [p.nombre for p in productos_out]
         fotos_por_nombre = await scraper_service.obtener_imagenes_productos(nombres)
     except Exception as exc:  # noqa: BLE001 - el enriquecimiento nunca debe tumbar el endpoint
         logger.warning("No se pudo enriquecer con fotos reales de Farmatodo: %s", exc)
-        return producto_out, alternativas_out
+        return productos_out
 
     def _con_foto_real(p: ProductoOut) -> ProductoOut:
         foto = fotos_por_nombre.get(p.nombre)
@@ -191,7 +228,14 @@ async def _enriquecer_con_fotos_reales(
             return p
         return p.model_copy(update={"imagen_url": foto, "imagen_referencial": True})
 
-    return _con_foto_real(producto_out), [_con_foto_real(a) for a in alternativas_out]
+    return [_con_foto_real(p) for p in productos_out]
+
+
+async def _enriquecer_con_fotos_reales(
+    producto_out: ProductoOut, alternativas_out: List[ProductoOut]
+) -> tuple[ProductoOut, List[ProductoOut]]:
+    enriquecidos = await _enriquecer_lista_con_fotos_reales([producto_out, *alternativas_out])
+    return enriquecidos[0], enriquecidos[1:]
 
 
 @app.get(
@@ -201,15 +245,20 @@ async def _enriquecer_con_fotos_reales(
     dependencies=[Depends(verificar_acceso)],
 )
 async def buscar(
-    q: str = Query(..., min_length=2, description="Nombre, SKU o descripción libre del medicamento"),
+    q: str = Query(
+        ...,
+        min_length=2,
+        description="Nombre completo o parcial, SKU, código de barras, o síntoma/descripción libre",
+    ),
     db: Session = Depends(get_db),
 ) -> BuscarResponse:
     consulta = q.strip()
     consulta_norm = consulta.lower()
 
-    # 1. Coincidencia exacta en base local (por nombre, SKU o código de
+    # 1. Coincidencia EXACTA en base local (por nombre, SKU o código de
     #    barras -este último es lo que llega cuando la búsqueda se
-    #    disparó desde el escáner de la app-).
+    #    disparó desde el escáner de la app-). Si la hay, no hay
+    #    ambigüedad posible: es la respuesta.
     producto = (
         db.query(Producto)
         .filter(
@@ -222,45 +271,77 @@ async def buscar(
 
     origen = "base_local"
     principio_activo_detectado: Optional[str] = None
+    candidatos: List[Producto] = []
+
+    if producto is None:
+        # 2. Sin coincidencia exacta -> coincidencias PARCIALES por
+        #    nombre, principio activo o descripción. No depende de IA.
+        candidatos = _buscar_candidatos(db, consulta)
+
+        if not candidatos:
+            # 3. Ni exacta ni parcial -> resolver con Gemini a partir de
+            #    la consulta libre (síntoma, descripción vaga), y
+            #    reintentar la búsqueda parcial con el principio activo
+            #    que haya sugerido.
+            origen = "ia_gemini"
+            info_ia = ai_resolver.extraer_info_medicamento(consulta)
+            principio_activo_detectado = info_ia.get("principio_activo")
+
+            if info_ia.get("error"):
+                logger.warning("ai_resolver: %s", info_ia["error"])
+
+            if principio_activo_detectado:
+                candidatos = _buscar_candidatos(db, principio_activo_detectado)
+
+        if len(candidatos) == 1:
+            # Una sola coincidencia parcial no es ambigua: se trata
+            # igual que una coincidencia exacta.
+            producto = candidatos[0]
+            candidatos = []
 
     if producto is not None:
         principio_activo_detectado = producto.principio_activo
-    else:
-        # 2. Sin coincidencia exacta -> resolver principio activo con IA.
-        origen = "ia_gemini"
-        info_ia = ai_resolver.extraer_info_medicamento(consulta)
-        principio_activo_detectado = info_ia.get("principio_activo")
 
-        if info_ia.get("error"):
-            logger.warning("ai_resolver: %s", info_ia["error"])
-
-        if principio_activo_detectado:
-            producto = (
-                db.query(Producto)
-                .filter(func.lower(Producto.principio_activo) == principio_activo_detectado.lower())
-                .order_by(Producto.stock.desc())
-                .first()
-            )
-
-    if producto is None:
+    if producto is None and not candidatos:
         return BuscarResponse(
             encontrado=False,
             origen=origen,
             producto=None,
             info_sucursal=None,
             principio_activo_detectado=principio_activo_detectado,
+            opciones=[],
             alternativas=[],
             mensaje=(
                 "No se encontró el medicamento en la base local ni coincidencias "
-                "por principio activo a partir de la consulta."
+                "por nombre, principio activo o síntoma a partir de la consulta."
             ),
         )
 
-    # 3. Consultar disponibilidad real/simulada en la sucursal Arbolitos.
+    if candidatos:
+        # 4. Varias coincidencias posibles: se devuelven todas como
+        #    opciones para que el usuario elija -sin adivinar cuál es-.
+        #    No se consulta stock de sucursal aquí todavía (eso pasa en
+        #    la segunda búsqueda, por el SKU exacto de la elegida).
+        opciones_out = await _enriquecer_lista_con_fotos_reales(
+            [ProductoOut.model_validate(c) for c in candidatos]
+        )
+        return BuscarResponse(
+            encontrado=True,
+            origen=origen,
+            producto=None,
+            info_sucursal=None,
+            principio_activo_detectado=principio_activo_detectado,
+            opciones=opciones_out,
+            alternativas=[],
+            mensaje=f"Se encontraron {len(opciones_out)} coincidencias, elige una.",
+        )
+
+    # 5. Coincidencia única y confirmada -> disponibilidad real/simulada
+    #    en la sucursal Arbolitos.
     info_sucursal_dict = await scraper.obtener_stock_sucursal(producto.sku, producto.nombre)
     info_sucursal = InfoSucursalOut(**info_sucursal_dict)
 
-    # 4. Si el stock (de sucursal o local) es cero, buscar alternativas.
+    # Si el stock (de sucursal o local) es cero, buscar alternativas.
     stock_efectivo = info_sucursal.cantidad if info_sucursal.disponible else 0
     alternativas: List[Producto] = []
     if stock_efectivo == 0 or producto.stock == 0:
@@ -269,7 +350,7 @@ async def buscar(
     producto_out = ProductoOut.model_validate(producto)
     alternativas_out = [ProductoOut.model_validate(a) for a in alternativas]
 
-    # 5. Enriquecer con fotos reales del catálogo de Farmatodo.
+    # 6. Enriquecer con fotos reales del catálogo de Farmatodo.
     producto_out, alternativas_out = await _enriquecer_con_fotos_reales(producto_out, alternativas_out)
 
     return BuscarResponse(
@@ -278,6 +359,7 @@ async def buscar(
         producto=producto_out,
         info_sucursal=info_sucursal,
         principio_activo_detectado=principio_activo_detectado,
+        opciones=[],
         alternativas=alternativas_out,
         mensaje=None,
     )

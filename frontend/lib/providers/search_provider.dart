@@ -47,7 +47,7 @@ class SearchProvider extends ChangeNotifier {
     final tieneRed = await _hayConexionDeRed();
     if (!tieneRed) {
       await _resolverSinConexion(
-        'Este dispositivo no tiene conexión de red en este momento.',
+        'No tienes conexión a internet en este momento (ni Wi-Fi ni datos móviles).',
       );
       return;
     }

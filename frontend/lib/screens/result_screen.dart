@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -47,9 +49,13 @@ class ResultScreen extends StatelessWidget {
                     case SearchStatus.success:
                       final data = provider.resultado;
                       if (data == null) return const _CargandoView();
-                      return data.encontrado
-                          ? _ResultadoEncontrado(data: data)
-                          : _NoEncontradoView(mensaje: data.mensaje);
+                      if (!data.encontrado) {
+                        return _NoEncontradoView(mensaje: data.mensaje);
+                      }
+                      if (data.producto == null && data.opciones.isNotEmpty) {
+                        return _OpcionesView(data: data);
+                      }
+                      return _ResultadoEncontrado(data: data);
                     case SearchStatus.offline:
                       final cacheado = provider.productoOffline;
                       if (cacheado == null) return const _CargandoView();
@@ -68,8 +74,34 @@ class ResultScreen extends StatelessWidget {
   }
 }
 
-class _CargandoView extends StatelessWidget {
+/// Vista de carga. Cambia el mensaje pasados unos segundos para avisar
+/// que una espera larga puede deberse al backend "despertando" (planes
+/// gratuitos en la nube), en vez de dejar al usuario dudando si la app
+/// se congeló.
+class _CargandoView extends StatefulWidget {
   const _CargandoView();
+
+  @override
+  State<_CargandoView> createState() => _CargandoViewState();
+}
+
+class _CargandoViewState extends State<_CargandoView> {
+  bool _esperaLarga = false;
+  Timer? _temporizador;
+
+  @override
+  void initState() {
+    super.initState();
+    _temporizador = Timer(const Duration(seconds: 6), () {
+      if (mounted) setState(() => _esperaLarga = true);
+    });
+  }
+
+  @override
+  void dispose() {
+    _temporizador?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -80,7 +112,11 @@ class _CargandoView extends StatelessWidget {
           const CircularProgressIndicator(color: AppColors.acento),
           const SizedBox(height: 16),
           Text(
-            'Consultando stock y alternativas...',
+            _esperaLarga
+                ? 'Esto puede tardar un poco más si el servidor estaba '
+                    'dormido — no cierres la app.'
+                : 'Consultando stock y alternativas...',
+            textAlign: TextAlign.center,
             style: GoogleFonts.inter(
               fontSize: 13,
               color: AppColors.primary.withValues(alpha: 0.6),
@@ -202,6 +238,52 @@ class _NoEncontradoView extends StatelessWidget {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// Varias coincidencias posibles (por nombre, principio activo o
+/// síntoma): se muestran como una lista para elegir, en vez de
+/// adivinar una. Tocar una opción dispara una nueva búsqueda por su
+/// SKU exacto -así sí trae disponibilidad real y alternativas-.
+class _OpcionesView extends StatelessWidget {
+  const _OpcionesView({required this.data});
+
+  final BuscarResponse data;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+      children: [
+        Row(
+          children: [
+            Icon(Icons.list_alt_rounded, size: 18, color: AppColors.primary.withValues(alpha: 0.7)),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                data.mensaje ?? 'Varias coincidencias, elige una',
+                style: GoogleFonts.inter(
+                  fontSize: 14.5,
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.primary,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        ...data.opciones.map(
+          (opcion) => Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: ProductCard(
+              producto: opcion,
+              onTap: () => context.read<SearchProvider>().buscar(opcion.sku),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }
