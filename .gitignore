@@ -1,0 +1,15 @@
+# Backend (Python)
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/farmacia.db
+backend/.env
+
+# El frontend (Flutter) ya trae su propio .gitignore dentro de frontend/.
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# Configuración local de Claude Code (no es parte del proyecto)
+.claude/settings.local.json

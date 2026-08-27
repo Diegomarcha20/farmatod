@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Permite tráfico HTTP sin cifrar (cleartext), bloqueado por defecto
+    desde Android 9 (API 28). El backend de FarmaTod es un servidor
+    interno HTTP plano en la red Wi-Fi de la tienda -no expuesto a
+    Internet-, así que este permiso es correcto y deliberado para una
+    herramienta interna en LAN, controlada por quien la instala (se
+    configura la IP a mano en Ajustes, no se navega a sitios externos).
+
+    Si en el futuro el backend se sirve con HTTPS, este archivo puede
+    eliminarse (y la referencia en AndroidManifest.xml) sin más cambios.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

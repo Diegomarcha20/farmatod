@@ -1,0 +1,22 @@
+# Blueprint de Render (render.yaml). Al conectar este repositorio en
+# Render como "Blueprint", esto configura automáticamente el servicio
+# web del backend: comando de build, comando de arranque, y los
+# nombres de las variables de entorno que hay que rellenar a mano
+# (GEMINI_API_KEY y APP_ACCESS_KEY nunca se guardan aquí -"sync: false"
+# le dice a Render que las pida en su panel, no que las lea de este
+# archivo-).
+services:
+  - type: web
+    name: farmatod-backend
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: APP_ACCESS_KEY
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.12.6
