@@ -598,6 +598,8 @@ class _FichaMedicaCard extends StatelessWidget {
                 _Etiqueta(texto: producto.principioActivo, icono: Icons.science_outlined),
                 if (producto.categoria != null)
                   _Etiqueta(texto: producto.categoria!, icono: Icons.category_outlined),
+                if (producto.laboratorio != null)
+                  _Etiqueta(texto: producto.laboratorio!, icono: Icons.factory_outlined),
                 StockBadge(stock: producto.stock),
               ],
             ),
@@ -610,6 +612,27 @@ class _FichaMedicaCard extends StatelessWidget {
                   height: 1.5,
                   color: AppColors.primary.withValues(alpha: 0.75),
                 ),
+              ),
+            ],
+            if (producto.laboratorio != null || producto.paisOrigen != null) ...[
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Icon(Icons.public, size: 13, color: AppColors.primary.withValues(alpha: 0.45)),
+                  const SizedBox(width: 5),
+                  Expanded(
+                    child: Text(
+                      [
+                        if (producto.laboratorio != null) 'Laboratorio: ${producto.laboratorio}',
+                        if (producto.paisOrigen != null) producto.paisOrigen,
+                      ].join(' — '),
+                      style: GoogleFonts.inter(
+                        fontSize: 11.5,
+                        color: AppColors.primary.withValues(alpha: 0.55),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ],
             const SizedBox(height: 14),

@@ -13,6 +13,7 @@ más práctico para una herramienta de un solo local.
 import json
 import logging
 import os
+from typing import Optional
 
 from dotenv import load_dotenv
 from google import genai
@@ -133,6 +134,73 @@ def _extraer_info_medicamento_sin_cache(consulta: str) -> dict:
         logger.error(resultado["error"])
 
     return resultado
+
+
+def generar_descripcion(nombre: str, principio_activo: str) -> Optional[str]:
+    """Genera con Gemini una descripción breve ("para qué sirve") para
+    un producto que no trae una en el catálogo local. Red de seguridad
+    para cuando se agreguen productos reales sin ese campo completo;
+    para el catálogo de ejemplo no debería activarse -ya viene con
+    descripción-. Nunca lanza una excepción: ante cualquier fallo
+    devuelve None y el llamador simplemente deja el campo vacío."""
+    clave_cache = f"descripcion::{nombre.strip().lower()}"
+    cacheado = _cache_ia.obtener(clave_cache)
+    if cacheado is not None:
+        return cacheado or None
+
+    if not _client:
+        return None
+
+    try:
+        respuesta = _client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=(
+                "Eres un asistente farmacéutico. Describe en una o dos frases, "
+                "en español claro y neutro, para qué se usa comúnmente este "
+                f'medicamento: "{nombre}" (principio activo: {principio_activo}). '
+                "No des dosis ni indicaciones médicas personalizadas, solo el uso "
+                "general. Responde solo con el texto de la descripción, sin comillas."
+            ),
+            config=types.GenerateContentConfig(temperature=0.2),
+        )
+        texto = (respuesta.text or "").strip()
+        _cache_ia.guardar(clave_cache, texto)
+        return texto or None
+    except Exception as exc:  # noqa: BLE001 - enriquecimiento best-effort, nunca debe romper /buscar
+        logger.warning("No se pudo generar descripción con Gemini: %s", exc)
+        return None
+
+
+def identificar_origen_laboratorio(laboratorio: str) -> Optional[str]:
+    """Genera con Gemini una frase corta sobre el país/origen de un
+    laboratorio farmacéutico, cuando el catálogo local no lo trae.
+    Misma lógica de red de seguridad que `generar_descripcion`. Nunca
+    lanza una excepción."""
+    clave_cache = f"origen::{laboratorio.strip().lower()}"
+    cacheado = _cache_ia.obtener(clave_cache)
+    if cacheado is not None:
+        return cacheado or None
+
+    if not _client:
+        return None
+
+    try:
+        respuesta = _client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=(
+                f'¿De qué país es el laboratorio farmacéutico "{laboratorio}"? '
+                "Responde en una sola frase corta y factual (ej. 'Laboratorio "
+                "venezolano.'). Si no lo sabes con certeza, responde exactamente "
+                "'Origen no disponible.'"
+            ),
+            config=types.GenerateContentConfig(temperature=0),
+        )
+        texto = (respuesta.text or "").strip()
+        _cache_ia.guardar(clave_cache, texto)
+        return texto or None
+    except Exception as exc:  # noqa: BLE001 - enriquecimiento best-effort, nunca debe romper /buscar
+        logger.warning("No se pudo identificar el origen del laboratorio con Gemini: %s", exc)
+        return None
 
 
 def estadisticas_cache() -> dict:

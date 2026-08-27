@@ -14,13 +14,18 @@ API principal. Expone /buscar, el endpoint central de la app:
 4. Si en cualquiera de los pasos 2-3 hay MÁS DE UNA coincidencia, se
    devuelven todas como `opciones` para que el usuario elija -en vez de
    adivinar una-. Si hay exactamente una, se trata igual que una
-   coincidencia exacta (sigue a los pasos 5-6).
+   coincidencia exacta (sigue a los pasos 5-7).
 5. Con el producto ya confirmado, consulta al scraper la disponibilidad
    real/simulada en la sucursal "Arbolitos, San Cristóbal" (stock e
    imagen). Si el stock resultante es 0, busca y devuelve alternativas
    terapéuticas: otros productos con el mismo principio activo que sí
    tengan stock.
-6. Enriquece el producto (u opciones) con una foto real tomada del
+6. Completa la ficha médica (descripción de para qué sirve, país de
+   origen del laboratorio) con Gemini SOLO si al catálogo local le
+   falta ese dato -para el catálogo de ejemplo no debería activarse,
+   ya viene completo; es la red de seguridad para catálogos reales
+   incompletos-.
+7. Enriquece el producto (u opciones) con una foto real tomada del
    catálogo público de Farmatodo Venezuela (vía scraper_service), sin
    importar cómo se llegó a la coincidencia. Si Farmatodo no responde,
    cada producto conserva su imagen local sin romper la respuesta.
@@ -94,6 +99,8 @@ class ProductoOut(BaseModel):
     principio_activo: str
     categoria: Optional[str] = None
     descripcion: Optional[str] = None
+    laboratorio: Optional[str] = None
+    pais_origen: Optional[str] = None
     precio: float
     stock: int
     ubicacion_planograma: str
@@ -204,6 +211,28 @@ def _buscar_alternativas(
     if sku_excluir:
         query = query.filter(Producto.sku != sku_excluir)
     return query.order_by(Producto.stock.desc()).all()
+
+
+def _completar_ficha_medica(producto_out: ProductoOut) -> ProductoOut:
+    """Rellena `descripcion` y `pais_origen` con Gemini SOLO si el
+    catálogo local no los trae -para este catálogo de ejemplo no
+    debería activarse nunca, ya viene completo; es la red de seguridad
+    para cuando se cargue un catálogo real con datos incompletos-. Se
+    llama únicamente sobre el producto ya confirmado (no por cada
+    opción de una lista), para no multiplicar llamadas a la IA."""
+    actualizaciones: dict = {}
+
+    if not producto_out.descripcion:
+        descripcion = ai_resolver.generar_descripcion(producto_out.nombre, producto_out.principio_activo)
+        if descripcion:
+            actualizaciones["descripcion"] = descripcion
+
+    if producto_out.laboratorio and not producto_out.pais_origen:
+        origen = ai_resolver.identificar_origen_laboratorio(producto_out.laboratorio)
+        if origen:
+            actualizaciones["pais_origen"] = origen
+
+    return producto_out.model_copy(update=actualizaciones) if actualizaciones else producto_out
 
 
 async def _enriquecer_lista_con_fotos_reales(productos_out: List[ProductoOut]) -> List[ProductoOut]:
@@ -350,7 +379,12 @@ async def buscar(
     producto_out = ProductoOut.model_validate(producto)
     alternativas_out = [ProductoOut.model_validate(a) for a in alternativas]
 
-    # 6. Enriquecer con fotos reales del catálogo de Farmatodo.
+    # 6. Completar ficha médica (descripción/origen) con IA si al
+    #    catálogo local le falta algún dato -no debería activarse para
+    #    este catálogo de ejemplo, que ya viene completo-.
+    producto_out = _completar_ficha_medica(producto_out)
+
+    # 7. Enriquecer con fotos reales del catálogo de Farmatodo.
     producto_out, alternativas_out = await _enriquecer_con_fotos_reales(producto_out, alternativas_out)
 
     return BuscarResponse(

@@ -26,7 +26,7 @@ class LocalCacheService {
     final ruta = join(await getDatabasesPath(), 'farmatod_cache.db');
     final db = await openDatabase(
       ruta,
-      version: 2,
+      version: 3,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE $_nombreTabla (
@@ -36,6 +36,8 @@ class LocalCacheService {
             principio_activo TEXT NOT NULL,
             categoria TEXT,
             descripcion TEXT,
+            laboratorio TEXT,
+            pais_origen TEXT,
             precio REAL NOT NULL,
             stock INTEGER NOT NULL,
             ubicacion_planograma TEXT NOT NULL,
@@ -54,6 +56,10 @@ class LocalCacheService {
           await db.execute(
             'ALTER TABLE $_nombreTabla ADD COLUMN imagen_referencial INTEGER NOT NULL DEFAULT 0',
           );
+        }
+        if (oldVersion < 3) {
+          await db.execute('ALTER TABLE $_nombreTabla ADD COLUMN laboratorio TEXT');
+          await db.execute('ALTER TABLE $_nombreTabla ADD COLUMN pais_origen TEXT');
         }
       },
     );

@@ -8,6 +8,8 @@ class Producto {
   final String principioActivo;
   final String? categoria;
   final String? descripcion;
+  final String? laboratorio;
+  final String? paisOrigen;
   final double precio;
   final int stock;
   final String ubicacionPlanograma;
@@ -26,6 +28,8 @@ class Producto {
     required this.principioActivo,
     this.categoria,
     this.descripcion,
+    this.laboratorio,
+    this.paisOrigen,
     required this.precio,
     required this.stock,
     required this.ubicacionPlanograma,
@@ -44,6 +48,8 @@ class Producto {
       principioActivo: json['principio_activo'] as String,
       categoria: json['categoria'] as String?,
       descripcion: json['descripcion'] as String?,
+      laboratorio: json['laboratorio'] as String?,
+      paisOrigen: json['pais_origen'] as String?,
       precio: (json['precio'] as num).toDouble(),
       stock: json['stock'] as int,
       ubicacionPlanograma: json['ubicacion_planograma'] as String,
@@ -63,6 +69,8 @@ class Producto {
       'principio_activo': principioActivo,
       'categoria': categoria,
       'descripcion': descripcion,
+      'laboratorio': laboratorio,
+      'pais_origen': paisOrigen,
       'precio': precio,
       'stock': stock,
       'ubicacion_planograma': ubicacionPlanograma,
@@ -80,6 +88,8 @@ class Producto {
       principioActivo: mapa['principio_activo'] as String,
       categoria: mapa['categoria'] as String?,
       descripcion: mapa['descripcion'] as String?,
+      laboratorio: mapa['laboratorio'] as String?,
+      paisOrigen: mapa['pais_origen'] as String?,
       precio: (mapa['precio'] as num).toDouble(),
       stock: mapa['stock'] as int,
       ubicacionPlanograma: mapa['ubicacion_planograma'] as String,

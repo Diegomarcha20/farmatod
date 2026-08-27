@@ -88,11 +88,15 @@ class ProductCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 4),
                     Text(
-                      producto.principioActivo,
+                      producto.laboratorio != null
+                          ? '${producto.principioActivo} · ${producto.laboratorio}'
+                          : producto.principioActivo,
                       style: GoogleFonts.inter(
                         fontSize: 12.5,
                         color: AppColors.primary.withValues(alpha: 0.6),
                       ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 8),
                     Row(
