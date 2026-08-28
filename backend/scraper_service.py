@@ -361,7 +361,24 @@ class FarmatodoScraper:
 
         if con_ficha_ssr and url_slug:
             ficha = await self._ficha_ssr(url_slug)
-            if ficha:
+            # Verificación de seguridad: solo se acepta el contenido de la
+            # ficha SSR si su SKU/MPN es EXACTAMENTE el mismo producto que
+            # ya identificamos por Algolia. Si Farmatodo redirige esa URL
+            # a otro producto (sustituto, agotado, lo que sea), el nombre
+            # y -sobre todo- la FOTO de esa ficha corresponderían a un
+            # producto distinto; en ese caso se ignora por completo y se
+            # queda con los datos de Algolia, que sí son del SKU correcto.
+            ficha_es_del_mismo_producto = bool(
+                ficha
+                and sku
+                and str(ficha.get("sku") or ficha.get("mpn") or "") == sku
+            )
+            if ficha and not ficha_es_del_mismo_producto:
+                logger.info(
+                    "Ficha SSR de %s no corresponde al SKU esperado (%s); se ignora para no mezclar foto/nombre de otro producto.",
+                    url_slug, sku,
+                )
+            if ficha_es_del_mismo_producto:
                 oferta = ficha.get("offers") or {}
                 nombre_comercial = (ficha.get("name") or nombre_comercial).strip()
                 imagen_url = ficha.get("image") or imagen_url
@@ -461,7 +478,10 @@ class FarmatodoScraper:
         imagen_url = hit.get("mediaImageUrl") or next(iter(hit.get("listUrlImages") or []), None)
 
         ficha = await self._ficha_ssr(url_slug) if url_slug else None
-        if ficha:
+        # Misma verificación que en _construir_candidato: solo se acepta
+        # la ficha SSR si es del mismo SKU, para que la foto nunca
+        # termine siendo la de un producto distinto.
+        if ficha and sku and str(ficha.get("sku") or ficha.get("mpn") or "") == sku:
             oferta = ficha.get("offers") or {}
             nombre_comercial = (ficha.get("name") or nombre_comercial).strip()
             imagen_url = ficha.get("image") or imagen_url
