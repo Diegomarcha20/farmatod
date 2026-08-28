@@ -3,28 +3,32 @@ API principal. Expone /buscar, el endpoint central de la app.
 
 Todo el catálogo sale en tiempo real del catálogo público de Farmatodo
 Venezuela (vía scraper_service), para la sucursal "Arbolitos, San
-Cristóbal" -no hay un catálogo local propio: la meta es que cualquier
-medicamento que exista ahí se pueda encontrar, sin límite artificial
-de resultados-.
+Cristóbal" -no hay un catálogo local propio-. Cubre TODO lo que vende
+Farmatodo (medicamentos, cuidado personal, bebé, alimentos, limpieza,
+belleza, etc.), no solo medicinas: la meta es que cualquier producto
+que exista ahí se pueda encontrar por nombre, sin límite artificial de
+resultados.
 
-1. Busca `q` (nombre completo o parcial, código de barras, o síntoma)
-   directamente en el catálogo real de Farmatodo. Devuelve TODOS los
-   candidatos que haya, cada uno con precio (Bs./USD con IGTF/COP con
-   IGTF), disponibilidad real en la sucursal, laboratorio y foto.
+1. Busca `q` (nombre completo o parcial, código de barras, o consulta
+   libre) directamente en el catálogo real de Farmatodo. Devuelve
+   TODOS los candidatos que haya, cada uno con precio (Bs./USD con
+   IGTF/COP con IGTF), disponibilidad real en la sucursal, categoría,
+   laboratorio/marca y foto.
 2. Si no hay ninguna coincidencia directa, usa Gemini para interpretar
-   la consulta libre (síntoma, descripción vaga) y reintenta la
-   búsqueda con el principio activo que haya sugerido.
+   la consulta libre (síntoma, necesidad, descripción vaga -de
+   cualquier tipo de producto-) y reintenta la búsqueda con el término
+   que haya sugerido.
 3. Si hay más de un candidato, se devuelven todos como `opciones` para
    que el usuario elija -sin adivinar una-. Si hay exactamente uno, se
    trata como LA respuesta.
 4. Con la respuesta ya confirmada: si Farmatodo no trae descripción
-   ("para qué sirve") o país del laboratorio, se completan con Gemini
-   -esos dos datos casi nunca vienen en el catálogo de Farmatodo, así
-   que este paso sí se activa de verdad, a diferencia del catálogo
-   local que se usaba antes-.
+   ("para qué es/sirve") o país del laboratorio/marca, se completan
+   con Gemini -esos dos datos casi nunca vienen en el catálogo de
+   Farmatodo, así que este paso sí se activa de verdad-.
 5. Si el producto confirmado está agotado, se busca otra vez en
-   Farmatodo por su principio activo para ofrecer alternativas
-   terapéuticas reales que sí tengan stock.
+   Farmatodo por su principio activo (medicamentos) o por su categoría
+   (cualquier otro producto) para ofrecer alternativas reales que sí
+   tengan stock.
 
 Nota: al venir de Farmatodo, no hay "ubicación en el planograma" (eso
 es un dato de la tienda física propia, que Farmatodo no expone para
@@ -87,12 +91,12 @@ def _tasas_actuales() -> TasasConfiguracion:
 app = FastAPI(
     title="API Farmacia - Catálogo real de Farmatodo",
     description=(
-        "Backend que busca en tiempo real en el catálogo público de "
-        "Farmatodo Venezuela (sucursal Arbolitos, San Cristóbal): "
-        "precio multidivisa, disponibilidad, laboratorio y alternativas "
-        "terapéuticas."
+        "Backend que busca en tiempo real en TODO el catálogo público de "
+        "Farmatodo Venezuela (sucursal Arbolitos, San Cristóbal) -no solo "
+        "medicamentos-: precio multidivisa, disponibilidad, laboratorio/"
+        "marca y alternativas reales."
     ),
-    version="2.0.0",
+    version="2.1.0",
 )
 
 app.add_middleware(
@@ -174,6 +178,7 @@ def _candidato_a_producto_out(candidato: dict) -> ProductoOut:
         sku=candidato["sku"] or "",
         nombre=candidato.get("nombre_comercial") or candidato["sku"] or "Producto sin nombre",
         principio_activo=_normalizar_texto(candidato.get("principio_activo")),
+        categoria=_normalizar_texto(candidato.get("categoria")),
         laboratorio=candidato.get("laboratorio"),
         precio_bs=precios["bs"],
         precio_usd=precios["usd"]["total_con_igtf"],
@@ -192,10 +197,10 @@ def _completar_ficha_medica(producto_out: ProductoOut) -> ProductoOut:
     únicamente sobre el producto ya confirmado (no por cada opción de
     una lista), para no multiplicar llamadas a la IA."""
     actualizaciones: dict = {}
-    principio_para_ia = producto_out.principio_activo or producto_out.nombre
+    pista_para_ia = producto_out.principio_activo or producto_out.categoria or producto_out.nombre
 
     if not producto_out.descripcion:
-        descripcion = ai_resolver.generar_descripcion(producto_out.nombre, principio_para_ia)
+        descripcion = ai_resolver.generar_descripcion(producto_out.nombre, pista_para_ia)
         if descripcion:
             actualizaciones["descripcion"] = descripcion
 
@@ -252,10 +257,12 @@ async def buscar(
 
     if not candidatos:
         # 2. Nada directo -> resolver con Gemini a partir de la consulta
-        #    libre (síntoma, descripción vaga) y reintentar en Farmatodo.
+        #    libre (síntoma, necesidad, descripción vaga -de cualquier
+        #    tipo de producto, no solo medicamentos-) y reintentar en
+        #    Farmatodo con el término que haya sugerido.
         origen = "ia_gemini"
-        info_ia = ai_resolver.extraer_info_medicamento(consulta)
-        principio_activo_detectado = info_ia.get("principio_activo")
+        info_ia = ai_resolver.extraer_termino_busqueda(consulta)
+        principio_activo_detectado = info_ia.get("termino_sugerido")
 
         if info_ia.get("error"):
             logger.warning("ai_resolver: %s", info_ia["error"])
@@ -271,7 +278,7 @@ async def buscar(
             principio_activo_detectado=principio_activo_detectado,
             fuente=resultado["meta"]["fuente"],
             mensaje=resultado["meta"].get("advertencia")
-            or "No se encontró el medicamento en el catálogo de Farmatodo.",
+            or "No se encontró el producto en el catálogo de Farmatodo.",
         )
 
     productos_out = [_candidato_a_producto_out(c) for c in candidatos]
@@ -295,13 +302,15 @@ async def buscar(
     # 4. Completar ficha médica (descripción/origen) con IA.
     producto_out = _completar_ficha_medica(producto_out)
 
-    # 5. Si está agotado, buscar alternativas terapéuticas reales por el
-    #    mismo principio activo (sin la dosis específica, para no
-    #    limitar de más la búsqueda).
+    # 5. Si está agotado, buscar alternativas reales: por el mismo
+    #    principio activo si es un medicamento (sin la dosis específica,
+    #    para no limitar de más), o por la misma categoría si es
+    #    cualquier otro tipo de producto (Farmatodo no vende solo
+    #    medicinas).
     alternativas_out: List[ProductoOut] = []
-    principio_base = _principio_activo_base(producto_out.principio_activo)
-    if not producto_out.en_stock and principio_base:
-        resultado_alt = await scraper_service.buscar_catalogo_real(principio_base, tasas)
+    termino_alternativas = _principio_activo_base(producto_out.principio_activo) or producto_out.categoria
+    if not producto_out.en_stock and termino_alternativas:
+        resultado_alt = await scraper_service.buscar_catalogo_real(termino_alternativas, tasas)
         alternativas_out = [
             _candidato_a_producto_out(c)
             for c in resultado_alt["candidatos"]

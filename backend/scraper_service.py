@@ -354,6 +354,10 @@ class FarmatodoScraper:
         imagen_url = hit.get("mediaImageUrl") or next(iter(hit.get("listUrlImages") or []), None)
         laboratorio = self._laboratorio_desde_hit(hit)
         principio_activo = hit.get("activePrinciple")
+        # Farmatodo vende de todo, no solo medicamentos: subCategory
+        # ("Champú") es más específico que categorie ("Cuidado del
+        # Cabello"); se usa lo que haya disponible.
+        categoria = hit.get("subCategory") or hit.get("categorie")
 
         if con_ficha_ssr and url_slug:
             ficha = await self._ficha_ssr(url_slug)
@@ -370,6 +374,7 @@ class FarmatodoScraper:
             "sku": sku,
             "nombre_comercial": nombre_comercial,
             "principio_activo": principio_activo,
+            "categoria": categoria,
             "laboratorio": laboratorio,
             "disponibilidad": {
                 "tienda": self._tienda.nombre_visible,

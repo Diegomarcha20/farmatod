@@ -1,9 +1,11 @@
 """
-Resolución con IA: cuando la búsqueda local no encuentra una coincidencia
-exacta, se le pide a Gemini (Google AI) que interprete la consulta en
-lenguaje natural del usuario y devuelva un JSON estructurado con el
-principio activo probable, para poder buscar alternativas terapéuticas
-en la base local.
+Resolución con IA: cuando la búsqueda directa en el catálogo real de
+Farmatodo no encuentra ninguna coincidencia, se le pide a Gemini
+(Google AI) que interprete la consulta en lenguaje natural del cliente
+-un síntoma, una necesidad, una descripción vaga, de CUALQUIER tipo de
+producto (Farmatodo vende medicamentos, cuidado personal, bebé,
+alimentos, limpieza, belleza, etc., no solo medicina)- y devuelva un
+término de búsqueda mejor, para reintentar en el catálogo real.
 
 Se eligió Gemini sobre OpenAI porque su nivel gratuito (Google AI
 Studio) no exige tarjeta de crédito para empezar a usarlo, lo cual es
@@ -39,35 +41,44 @@ CACHE_TTL_SEGUNDOS = int(os.getenv("CACHE_IA_TTL_SEGUNDOS", "1800"))
 _cache_ia = TTLCache(ttl_segundos=CACHE_TTL_SEGUNDOS)
 
 SYSTEM_PROMPT = (
-    "Eres un asistente farmacéutico. A partir de una consulta en lenguaje "
-    "natural de un cliente (por ejemplo, el nombre comercial de un "
-    "medicamento, un síntoma, o una descripción vaga), debes identificar el "
-    "principio activo farmacológico más probable al que se refiere. "
+    "Eres un asistente de búsqueda para Farmatodo, una tienda que vende de "
+    "todo: medicamentos, cuidado personal, higiene, bebé, alimentos y "
+    "bebidas, limpieza del hogar, belleza, etc. -no es una farmacia que "
+    "solo vende medicinas-. A partir de una consulta en lenguaje natural de "
+    "un cliente (un síntoma, una necesidad, un nombre comercial mal "
+    "escrito, o una descripción vaga de CUALQUIER producto que Farmatodo "
+    "podría vender), sugiere el mejor término para buscar en el catálogo. "
     "Responde ÚNICAMENTE con un objeto JSON con las siguientes claves:\n"
-    '- "principio_activo": nombre genérico del principio activo en español '
-    "(ej. Paracetamol, Ibuprofeno, Loratadina). Usa capitalización estándar.\n"
+    '- "termino_sugerido": el término más efectivo para buscar el producto '
+    "en el catálogo -si es un tema de salud, el principio activo "
+    "farmacológico (ej. Paracetamol, Ibuprofeno); si es cualquier otro tipo "
+    "de producto, el nombre genérico o tipo de producto (ej. Champú "
+    "anticaspa, Pañales talla G, Papel higiénico). Usa capitalización "
+    "estándar.\n"
     '- "nombre_comercial_probable": el nombre comercial que el usuario '
     "probablemente quiso escribir, si aplica.\n"
-    '- "categoria_terapeutica": categoría terapéutica general.\n'
+    '- "categoria_probable": categoría general del producto (ej. '
+    '"Analgésico", "Cuidado del cabello", "Higiene del bebé").\n'
     '- "confianza": un número entre 0 y 1 indicando qué tan seguro estás.\n'
-    "Si no puedes determinar el principio activo, usa null en ese campo."
+    "Si no puedes determinar nada razonable, usa null en esos campos."
 )
 
 FALLBACK_RESULT = {
-    "principio_activo": None,
+    "termino_sugerido": None,
     "nombre_comercial_probable": None,
-    "categoria_terapeutica": None,
+    "categoria_probable": None,
     "confianza": 0.0,
     "error": None,
 }
 
 
-def extraer_info_medicamento(consulta: str) -> dict:
+def extraer_termino_busqueda(consulta: str) -> dict:
     """
-    Resuelve el principio activo de una consulta libre con Gemini,
-    sirviendo desde caché (TTL configurable, 30 min por defecto) si la
-    misma consulta ya se resolvió recientemente. Nunca lanza una
-    excepción hacia el llamador.
+    Resuelve el mejor término de búsqueda para una consulta libre (de
+    cualquier tipo de producto Farmatodo, no solo medicamentos) con
+    Gemini, sirviendo desde caché (TTL configurable, 30 min por
+    defecto) si la misma consulta ya se resolvió recientemente. Nunca
+    lanza una excepción hacia el llamador.
     """
     clave_cache = (consulta or "").strip().lower()
 
@@ -77,7 +88,7 @@ def extraer_info_medicamento(consulta: str) -> dict:
             logger.info("ai_resolver: acierto de caché para %r.", clave_cache)
             return {**cacheado, "desde_cache": True}
 
-    resultado = _extraer_info_medicamento_sin_cache(consulta)
+    resultado = _extraer_termino_busqueda_sin_cache(consulta)
 
     # Solo se cachean resoluciones exitosas: un fallo transitorio de
     # Gemini no debe "congelar" un error por 30 minutos.
@@ -87,9 +98,10 @@ def extraer_info_medicamento(consulta: str) -> dict:
     return {**resultado, "desde_cache": False}
 
 
-def _extraer_info_medicamento_sin_cache(consulta: str) -> dict:
+def _extraer_termino_busqueda_sin_cache(consulta: str) -> dict:
     """
-    Llama a Gemini para extraer el principio activo de una consulta libre.
+    Llama a Gemini para sugerir un término de búsqueda a partir de una
+    consulta libre.
 
     Nunca lanza una excepción hacia el llamador: ante cualquier fallo
     (sin API key, timeout, respuesta no parseable, error de la API, etc.)
@@ -121,9 +133,9 @@ def _extraer_info_medicamento_sin_cache(consulta: str) -> dict:
         contenido = respuesta.text or "{}"
         datos = json.loads(contenido)
 
-        resultado["principio_activo"] = datos.get("principio_activo")
+        resultado["termino_sugerido"] = datos.get("termino_sugerido")
         resultado["nombre_comercial_probable"] = datos.get("nombre_comercial_probable")
-        resultado["categoria_terapeutica"] = datos.get("categoria_terapeutica")
+        resultado["categoria_probable"] = datos.get("categoria_probable")
         resultado["confianza"] = datos.get("confianza", 0.0)
 
     except json.JSONDecodeError as exc:
@@ -136,13 +148,15 @@ def _extraer_info_medicamento_sin_cache(consulta: str) -> dict:
     return resultado
 
 
-def generar_descripcion(nombre: str, principio_activo: str) -> Optional[str]:
-    """Genera con Gemini una descripción breve ("para qué sirve") para
-    un producto que no trae una en el catálogo local. Red de seguridad
-    para cuando se agreguen productos reales sin ese campo completo;
-    para el catálogo de ejemplo no debería activarse -ya viene con
-    descripción-. Nunca lanza una excepción: ante cualquier fallo
-    devuelve None y el llamador simplemente deja el campo vacío."""
+def generar_descripcion(nombre: str, pista: str) -> Optional[str]:
+    """Genera con Gemini una descripción breve ("para qué es/sirve")
+    para un producto que Farmatodo no trae -su catálogo casi nunca
+    incluye esto, así que este paso se activa de verdad para cualquier
+    tipo de producto, no solo medicamentos-. `pista` es el mejor dato
+    de contexto disponible (principio activo si es un medicamento,
+    categoría si es cualquier otro producto). Nunca lanza una
+    excepción: ante cualquier fallo devuelve None y el llamador
+    simplemente deja el campo vacío."""
     clave_cache = f"descripcion::{nombre.strip().lower()}"
     cacheado = _cache_ia.obtener(clave_cache)
     if cacheado is not None:
@@ -155,11 +169,13 @@ def generar_descripcion(nombre: str, principio_activo: str) -> Optional[str]:
         respuesta = _client.models.generate_content(
             model=GEMINI_MODEL,
             contents=(
-                "Eres un asistente farmacéutico. Describe en una o dos frases, "
-                "en español claro y neutro, para qué se usa comúnmente este "
-                f'medicamento: "{nombre}" (principio activo: {principio_activo}). '
-                "No des dosis ni indicaciones médicas personalizadas, solo el uso "
-                "general. Responde solo con el texto de la descripción, sin comillas."
+                "Eres un asistente de una tienda tipo farmacia que vende de "
+                "todo (medicamentos, cuidado personal, bebé, alimentos, "
+                "limpieza, belleza, etc.). Describe en una o dos frases, en "
+                f'español claro y neutro, qué es o para qué sirve: "{nombre}" '
+                f"(contexto: {pista}). Si es un medicamento, no des dosis ni "
+                "indicaciones médicas personalizadas, solo el uso general. "
+                "Responde solo con el texto de la descripción, sin comillas."
             ),
             config=types.GenerateContentConfig(temperature=0.2),
         )
@@ -173,9 +189,11 @@ def generar_descripcion(nombre: str, principio_activo: str) -> Optional[str]:
 
 def identificar_origen_laboratorio(laboratorio: str) -> Optional[str]:
     """Genera con Gemini una frase corta sobre el país/origen de un
-    laboratorio farmacéutico, cuando el catálogo local no lo trae.
-    Misma lógica de red de seguridad que `generar_descripcion`. Nunca
-    lanza una excepción."""
+    laboratorio o marca/fabricante (no todo lo que vende Farmatodo es
+    de un laboratorio farmacéutico -puede ser una marca de cuidado
+    personal, alimentos, etc.-), cuando el catálogo no lo trae. Misma
+    lógica de red de seguridad que `generar_descripcion`. Nunca lanza
+    una excepción."""
     clave_cache = f"origen::{laboratorio.strip().lower()}"
     cacheado = _cache_ia.obtener(clave_cache)
     if cacheado is not None:
@@ -188,10 +206,10 @@ def identificar_origen_laboratorio(laboratorio: str) -> Optional[str]:
         respuesta = _client.models.generate_content(
             model=GEMINI_MODEL,
             contents=(
-                f'¿De qué país es el laboratorio farmacéutico "{laboratorio}"? '
-                "Responde en una sola frase corta y factual (ej. 'Laboratorio "
-                "venezolano.'). Si no lo sabes con certeza, responde exactamente "
-                "'Origen no disponible.'"
+                f'¿De qué país es el laboratorio, marca o fabricante "{laboratorio}"? '
+                "Responde en una sola frase corta y factual (ej. 'Marca "
+                "venezolana.' o 'Laboratorio venezolano.'). Si no lo sabes con "
+                "certeza, responde exactamente 'Origen no disponible.'"
             ),
             config=types.GenerateContentConfig(temperature=0),
         )
