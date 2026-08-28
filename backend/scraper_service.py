@@ -312,10 +312,15 @@ class FarmatodoScraper:
         return self._tienda.store_id in (hit.get("stores_with_stock") or [])
 
     def _cantidad_aproximada(self, hit: dict[str, Any], en_stock: bool) -> str:
+        """Farmatodo NO expone una cantidad exacta por tienda en ningún
+        campo (`totalStock` viene siempre en 0 o None) -esto es lo más
+        preciso que se puede mostrar honestamente-. "Pocas unidades" se
+        evalúa para la tienda configurada específicamente
+        (`stores_with_low_stock`), no como un flag genérico nacional."""
         if not en_stock:
             return "Agotado en esta tienda"
-        if hit.get("lowStock"):
-            return hit.get("lowStockLabel") or "Pocas unidades"
+        if self._tienda.store_id in (hit.get("stores_with_low_stock") or []):
+            return "Pocas unidades"
         return "Disponible"
 
     def _nombre_desde_slug(self, url_slug: str) -> str:

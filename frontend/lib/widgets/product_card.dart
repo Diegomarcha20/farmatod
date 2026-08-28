@@ -76,6 +76,13 @@ class ProductCard extends StatelessWidget {
       if (producto.laboratorio != null) producto.laboratorio!,
     ].join(' · ');
 
+    // Muestra una sola divisa de referencia en la tarjeta compacta
+    // (USD si está configurada, si no la primera que haya) -la ficha
+    // completa del resultado sí muestra todas-.
+    final codigosDivisa = producto.precios.keys.toList();
+    final codigoReferencia = codigosDivisa.contains('USD') ? 'USD' : (codigosDivisa.isNotEmpty ? codigosDivisa.first : null);
+    final divisaReferencia = codigoReferencia != null ? producto.precios[codigoReferencia] : null;
+
     return Card(
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -162,13 +169,14 @@ class ProductCard extends StatelessWidget {
                                 color: AppColors.primary,
                               ),
                             ),
-                            Text(
-                              '≈ \$${producto.precioUsd.toStringAsFixed(2)}',
-                              style: GoogleFonts.inter(
-                                fontSize: 11,
-                                color: AppColors.primary.withValues(alpha: 0.5),
+                            if (divisaReferencia != null)
+                              Text(
+                                '≈ ${divisaReferencia.totalConIgtf.toStringAsFixed(2)} $codigoReferencia',
+                                style: GoogleFonts.inter(
+                                  fontSize: 11,
+                                  color: AppColors.primary.withValues(alpha: 0.5),
+                                ),
                               ),
-                            ),
                           ],
                         ),
                         StockBadge(enStock: producto.enStock, compacto: true),

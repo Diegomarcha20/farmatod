@@ -11,9 +11,10 @@ resultados.
 
 1. Busca `q` (nombre completo o parcial, código de barras, o consulta
    libre) directamente en el catálogo real de Farmatodo. Devuelve
-   TODOS los candidatos que haya, cada uno con precio (Bs./USD con
-   IGTF/COP con IGTF), disponibilidad real en la sucursal, categoría,
-   laboratorio/marca y foto.
+   TODOS los candidatos que haya, cada uno con precio en Bs. y en
+   CUALQUIER moneda configurada manualmente (con 3% de IGTF aplicado),
+   disponibilidad real en la sucursal, categoría, laboratorio/marca y
+   foto.
 2. Si no hay ninguna coincidencia directa, usa Gemini para interpretar
    la consulta libre (síntoma, necesidad, descripción vaga -de
    cualquier tipo de producto-) y reintenta la búsqueda con el término
@@ -65,12 +66,14 @@ def verificar_acceso(x_app_key: Optional[str] = Header(default=None)) -> None:
 
 
 # Tasas de cambio para el motor multidivisa (ver currency_converter.py).
-# Si no se configuran TASA_USD_BCV / TASA_COP_USD como variables de
-# entorno, se usa un valor de referencia aproximado -para que la
-# búsqueda de producto siga funcionando igual, aunque el precio en
-# USD/COP no sea exacto- en vez de tumbar el endpoint.
-_TASA_USD_BCV_FALLBACK = "200"
-_TASA_COP_USD_FALLBACK = "4000"
+# 100% manuales: se configuran con la variable de entorno TASAS_CAMBIO,
+# formato "USD:246.50,COP:16.67" -cada número es "cuántos Bs. equivalen
+# a 1 unidad de esa moneda"-. Agregar o quitar una moneda es editar esa
+# variable, sin tocar código. Si no está configurada, se usa un valor
+# de referencia aproximado -para que la búsqueda de producto siga
+# funcionando igual, aunque el precio en divisas no sea exacto- en vez
+# de tumbar el endpoint.
+_TASAS_FALLBACK = "USD:200,COP:16"
 
 
 def _tasas_actuales() -> TasasConfiguracion:
@@ -79,13 +82,11 @@ def _tasas_actuales() -> TasasConfiguracion:
     except TasaInvalidaError as exc:
         logger.warning(
             "Tasas de cambio no configuradas (%s); usando valores de referencia "
-            "aproximados. Define TASA_USD_BCV y TASA_COP_USD para precios reales.",
+            "aproximados. Define TASAS_CAMBIO (ej. \"USD:246.50,COP:16.67\") para "
+            "precios reales.",
             exc,
         )
-        return TasasConfiguracion.crear(
-            tasa_usd_bcv=_TASA_USD_BCV_FALLBACK,
-            tasa_cop_usd=_TASA_COP_USD_FALLBACK,
-        )
+        return TasasConfiguracion.desde_texto(_TASAS_FALLBACK)
 
 
 app = FastAPI(
@@ -113,6 +114,12 @@ app.add_middleware(
 # --------------------------------------------------------------------------
 
 
+class PrecioDivisaOut(BaseModel):
+    base: float
+    igtf_3pct: float
+    total_con_igtf: float
+
+
 class ProductoOut(BaseModel):
     sku: str
     nombre: str
@@ -122,8 +129,9 @@ class ProductoOut(BaseModel):
     laboratorio: Optional[str] = None
     pais_origen: Optional[str] = None
     precio_bs: float
-    precio_usd: float
-    precio_cop: float
+    # Una entrada por cada moneda configurada en TASAS_CAMBIO (ej.
+    # {"USD": {...}, "COP": {...}}) -no hay un límite fijo de monedas-.
+    precios: dict[str, PrecioDivisaOut]
     en_stock: bool
     cantidad_aproximada: str
     # Farmatodo no expone el layout físico de una tienda de terceros;
@@ -181,8 +189,7 @@ def _candidato_a_producto_out(candidato: dict) -> ProductoOut:
         categoria=_normalizar_texto(candidato.get("categoria")),
         laboratorio=candidato.get("laboratorio"),
         precio_bs=precios["bs"],
-        precio_usd=precios["usd"]["total_con_igtf"],
-        precio_cop=precios["cop"]["total_con_igtf"],
+        precios={codigo: PrecioDivisaOut(**valores) for codigo, valores in precios["divisas"].items()},
         en_stock=disponibilidad["en_stock"],
         cantidad_aproximada=disponibilidad["cantidad_aproximada"],
         sucursal=disponibilidad["tienda"],

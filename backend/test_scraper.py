@@ -4,17 +4,18 @@ test_scraper.py
 Script ejecutable directo (no requiere pytest) para probar en consola
 la búsqueda de un medicamento real en Farmatodo Venezuela, mostrando
 la disponibilidad en la sucursal "Arbolitos, San Cristóbal" y la tabla
-de precios (Bs. / USD con IGTF / COP con IGTF) ya calculada.
+de precios (Bs. + cualquier moneda configurada, con IGTF) ya calculada.
 
 Uso:
     python test_scraper.py
     python test_scraper.py "ibuprofeno 400"
-    python test_scraper.py "paracetamol" --usd-bcv 246.50 --cop-usd 4050
+    python test_scraper.py "paracetamol" --tasas "USD:246.50,COP:16.67,EUR:268.30"
 
-Las tasas de cambio son configurables por línea de comandos; si se
-omiten, se usan valores de ejemplo indicados explícitamente en pantalla
-(reemplázalos por la tasa BCV y la tasa COP/USD vigentes el día que
-ejecutes la prueba).
+Las tasas de cambio son configurables por línea de comandos (cualquier
+cantidad de monedas, no solo USD/COP); si se omiten, se usan valores de
+ejemplo indicados explícitamente en pantalla (reemplázalos por las
+tasas vigentes el día que ejecutes la prueba). Cada tasa es "cuántos
+Bs. equivalen a 1 unidad de esa moneda".
 """
 
 from __future__ import annotations
@@ -23,13 +24,11 @@ import argparse
 import asyncio
 import json
 import sys
-from decimal import Decimal
 
 from currency_converter import TasaInvalidaError, TasasConfiguracion
 from scraper_service import FarmatodoScraper, TiendaObjetivo
 
-TASA_USD_BCV_EJEMPLO = Decimal("246.50")
-TASA_COP_USD_EJEMPLO = Decimal("4050.00")
+TASAS_EJEMPLO = "USD:246.50,COP:16.67"
 
 
 def _parsear_argumentos() -> argparse.Namespace:
@@ -42,8 +41,12 @@ def _parsear_argumentos() -> argparse.Namespace:
         default="paracetamol",
         help="Nombre del medicamento a buscar (por defecto: 'paracetamol').",
     )
-    parser.add_argument("--usd-bcv", type=str, default=str(TASA_USD_BCV_EJEMPLO), help="Tasa Bs./USD (BCV).")
-    parser.add_argument("--cop-usd", type=str, default=str(TASA_COP_USD_EJEMPLO), help="Tasa COP/USD.")
+    parser.add_argument(
+        "--tasas",
+        type=str,
+        default=TASAS_EJEMPLO,
+        help='Tasas de cambio, formato "USD:246.50,COP:16.67,EUR:268.30" (cualquier moneda).',
+    )
     return parser.parse_args()
 
 
@@ -81,10 +84,10 @@ def _imprimir_tabla_precios(precios: dict | None) -> None:
     print(f" {'Moneda':<18}{'Base':>12}{'IGTF (3%)':>14}{'Total':>14}")
     print(_linea())
     print(f" {'Bolívares (Bs.)':<18}{precios['bs']:>12,.2f}{'—':>14}{precios['bs']:>14,.2f}")
-    usd = precios["usd"]
-    print(f" {'Dólares (USD)':<18}{usd['base']:>12,.2f}{usd['igtf_3pct']:>14,.2f}{usd['total_con_igtf']:>14,.2f}")
-    cop = precios["cop"]
-    print(f" {'Pesos Col. (COP)':<18}{cop['base']:>12,.2f}{cop['igtf_3pct']:>14,.2f}{cop['total_con_igtf']:>14,.2f}")
+    for codigo, divisa in precios["divisas"].items():
+        print(
+            f" {codigo:<18}{divisa['base']:>12,.2f}{divisa['igtf_3pct']:>14,.2f}{divisa['total_con_igtf']:>14,.2f}"
+        )
     print(_linea())
 
 
@@ -122,15 +125,13 @@ def main() -> int:
     argumentos = _parsear_argumentos()
 
     try:
-        tasas = TasasConfiguracion.crear(
-            tasa_usd_bcv=argumentos.usd_bcv,
-            tasa_cop_usd=argumentos.cop_usd,
-        )
+        tasas = TasasConfiguracion.desde_texto(argumentos.tasas)
     except TasaInvalidaError as exc:
         print(f"Error de configuración de tasas: {exc}", file=sys.stderr)
         return 1
 
-    print(f"(Tasas usadas: 1 USD = {tasas.tasa_usd_bcv} Bs. | 1 USD = {tasas.tasa_cop_usd} COP)\n")
+    resumen_tasas = " | ".join(f"1 {codigo} = {tasa} Bs." for codigo, tasa in tasas.tasas.items())
+    print(f"(Tasas usadas: {resumen_tasas})\n")
 
     try:
         asyncio.run(_ejecutar(argumentos.termino, tasas))

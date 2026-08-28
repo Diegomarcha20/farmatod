@@ -27,7 +27,7 @@ class LocalCacheService {
     final ruta = join(await getDatabasesPath(), 'farmatod_cache.db');
     final db = await openDatabase(
       ruta,
-      version: 4,
+      version: 5,
       onCreate: (db, version) async {
         await _crearTabla(db);
       },
@@ -54,8 +54,7 @@ class LocalCacheService {
         laboratorio TEXT,
         pais_origen TEXT,
         precio_bs REAL NOT NULL,
-        precio_usd REAL NOT NULL,
-        precio_cop REAL NOT NULL,
+        precios_json TEXT NOT NULL,
         en_stock INTEGER NOT NULL,
         cantidad_aproximada TEXT,
         ubicacion_planograma TEXT,

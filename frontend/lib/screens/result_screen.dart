@@ -627,15 +627,18 @@ class _FichaMedicaCard extends StatelessWidget {
                 color: AppColors.primary,
               ),
             ),
-            const SizedBox(height: 2),
-            Text(
-              '≈ \$${producto.precioUsd.toStringAsFixed(2)} USD (con IGTF)  ·  '
-              '≈ ${producto.precioCop.toStringAsFixed(0)} COP (con IGTF)',
-              style: GoogleFonts.inter(
-                fontSize: 12,
-                color: AppColors.primary.withValues(alpha: 0.55),
+            if (producto.precios.isNotEmpty) ...[
+              const SizedBox(height: 2),
+              Text(
+                producto.precios.entries
+                    .map((e) => '≈ ${e.value.totalConIgtf.toStringAsFixed(2)} ${e.key} (con IGTF)')
+                    .join('  ·  '),
+                style: GoogleFonts.inter(
+                  fontSize: 12,
+                  color: AppColors.primary.withValues(alpha: 0.55),
+                ),
               ),
-            ),
+            ],
           ],
         ),
       ),

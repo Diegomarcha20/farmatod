@@ -5,7 +5,38 @@
 // hay un conteo exacto de stock (solo disponible/no disponible +
 // "cantidad aproximada"), ni ubicación en planograma garantizada
 // (Farmatodo no conoce el layout físico de una tienda de terceros), y
-// el precio viene ya convertido a Bs./USD (con IGTF)/COP (con IGTF).
+// el precio viene ya convertido a Bs. + CUALQUIER moneda que el
+// usuario haya configurado manualmente en el backend (con IGTF), no
+// solo USD/COP fijos.
+
+import 'dart:convert';
+
+/// Precio ya convertido a una divisa concreta (con y sin IGTF).
+class PrecioDivisa {
+  final double base;
+  final double igtf3pct;
+  final double totalConIgtf;
+
+  const PrecioDivisa({
+    required this.base,
+    required this.igtf3pct,
+    required this.totalConIgtf,
+  });
+
+  factory PrecioDivisa.fromJson(Map<String, dynamic> json) {
+    return PrecioDivisa(
+      base: (json['base'] as num).toDouble(),
+      igtf3pct: (json['igtf_3pct'] as num).toDouble(),
+      totalConIgtf: (json['total_con_igtf'] as num).toDouble(),
+    );
+  }
+
+  Map<String, Object?> toJson() => {
+        'base': base,
+        'igtf_3pct': igtf3pct,
+        'total_con_igtf': totalConIgtf,
+      };
+}
 
 class Producto {
   final String sku;
@@ -16,8 +47,10 @@ class Producto {
   final String? laboratorio;
   final String? paisOrigen;
   final double precioBs;
-  final double precioUsd;
-  final double precioCop;
+
+  /// Una entrada por cada moneda configurada en el backend (ej. "USD",
+  /// "COP", o cualquier otra) -sin límite fijo de monedas-.
+  final Map<String, PrecioDivisa> precios;
   final bool enStock;
   final String cantidadAproximada;
   final String? ubicacionPlanograma;
@@ -33,14 +66,20 @@ class Producto {
     this.laboratorio,
     this.paisOrigen,
     required this.precioBs,
-    required this.precioUsd,
-    required this.precioCop,
+    required this.precios,
     required this.enStock,
     required this.cantidadAproximada,
     this.ubicacionPlanograma,
     required this.sucursal,
     this.imagenUrl,
   });
+
+  static Map<String, PrecioDivisa> _precioDivisasFromJson(dynamic json) {
+    final mapa = json as Map<String, dynamic>? ?? const {};
+    return mapa.map(
+      (codigo, valor) => MapEntry(codigo, PrecioDivisa.fromJson(valor as Map<String, dynamic>)),
+    );
+  }
 
   factory Producto.fromJson(Map<String, dynamic> json) {
     return Producto(
@@ -52,8 +91,7 @@ class Producto {
       laboratorio: json['laboratorio'] as String?,
       paisOrigen: json['pais_origen'] as String?,
       precioBs: (json['precio_bs'] as num).toDouble(),
-      precioUsd: (json['precio_usd'] as num).toDouble(),
-      precioCop: (json['precio_cop'] as num).toDouble(),
+      precios: _precioDivisasFromJson(json['precios']),
       enStock: json['en_stock'] as bool,
       cantidadAproximada: json['cantidad_aproximada'] as String? ?? '',
       ubicacionPlanograma: json['ubicacion_planograma'] as String?,
@@ -63,7 +101,9 @@ class Producto {
   }
 
   /// Representación plana para guardar en el caché local (SQLite), que
-  /// respalda la búsqueda cuando no hay conexión con el backend.
+  /// respalda la búsqueda cuando no hay conexión con el backend. El
+  /// mapa de divisas (variable en cantidad/monedas) se serializa como
+  /// JSON en una sola columna de texto.
   Map<String, Object?> toDbMap() {
     return {
       'sku': sku,
@@ -74,8 +114,7 @@ class Producto {
       'laboratorio': laboratorio,
       'pais_origen': paisOrigen,
       'precio_bs': precioBs,
-      'precio_usd': precioUsd,
-      'precio_cop': precioCop,
+      'precios_json': jsonEncode(precios.map((codigo, p) => MapEntry(codigo, p.toJson()))),
       'en_stock': enStock ? 1 : 0,
       'cantidad_aproximada': cantidadAproximada,
       'ubicacion_planograma': ubicacionPlanograma,
@@ -85,6 +124,7 @@ class Producto {
   }
 
   factory Producto.fromDbMap(Map<String, Object?> mapa) {
+    final precioJson = mapa['precios_json'] as String?;
     return Producto(
       sku: mapa['sku'] as String,
       nombre: mapa['nombre'] as String,
@@ -94,8 +134,9 @@ class Producto {
       laboratorio: mapa['laboratorio'] as String?,
       paisOrigen: mapa['pais_origen'] as String?,
       precioBs: (mapa['precio_bs'] as num).toDouble(),
-      precioUsd: (mapa['precio_usd'] as num).toDouble(),
-      precioCop: (mapa['precio_cop'] as num).toDouble(),
+      precios: precioJson != null && precioJson.isNotEmpty
+          ? _precioDivisasFromJson(jsonDecode(precioJson) as Map<String, dynamic>)
+          : const {},
       enStock: (mapa['en_stock'] as int?) == 1,
       cantidadAproximada: mapa['cantidad_aproximada'] as String? ?? '',
       ubicacionPlanograma: mapa['ubicacion_planograma'] as String?,
