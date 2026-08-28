@@ -28,7 +28,7 @@ load_dotenv()
 logger = logging.getLogger("ai_resolver")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
 _client: genai.Client | None = None
 if GEMINI_API_KEY:

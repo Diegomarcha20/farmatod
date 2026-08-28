@@ -273,6 +273,10 @@ class _OpcionesView extends StatelessWidget {
             ),
           ],
         ),
+        if (data.resumenIa != null) ...[
+          const SizedBox(height: 12),
+          _ResumenIaCard(texto: data.resumenIa!),
+        ],
         const SizedBox(height: 14),
         ...data.opciones.map(
           (opcion) => Padding(
@@ -284,6 +288,44 @@ class _OpcionesView extends StatelessWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// Resumen de IA compartido para todo un grupo de opciones (mismo
+/// principio activo, distintas marcas/concentraciones): "para qué
+/// sirve" en general, en vez de repetir el mismo texto en cada
+/// tarjeta de producto.
+class _ResumenIaCard extends StatelessWidget {
+  const _ResumenIaCard({required this.texto});
+
+  final String texto;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: AppColors.acento.withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.auto_awesome, size: 16, color: AppColors.primary.withValues(alpha: 0.7)),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              texto,
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                height: 1.4,
+                color: AppColors.primary.withValues(alpha: 0.8),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

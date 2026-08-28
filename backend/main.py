@@ -39,6 +39,7 @@ terceros) -el campo queda presente en el esquema pero vacío-.
 import logging
 import os
 import re
+from collections import Counter
 from typing import List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -152,6 +153,11 @@ class BuscarResponse(BaseModel):
     alternativas: List[ProductoOut] = []
     fuente: Optional[str] = None  # "scraping_real" | "cache" | "error" | "no_encontrado"
     mensaje: Optional[str] = None
+    # Resumen único generado por IA para TODO el grupo de opciones (no
+    # uno repetido por cada opción) cuando comparten principio activo,
+    # ej. "para qué sirve" el Ibuprofeno en general -ver
+    # `_resumen_ia_para_opciones`-.
+    resumen_ia: Optional[str] = None
 
 
 # --------------------------------------------------------------------------
@@ -177,6 +183,79 @@ def _principio_activo_base(texto: Optional[str]) -> Optional[str]:
         return None
     sin_dosis = re.sub(r"\s*\([^)]*\)\s*$", "", texto).strip()
     return sin_dosis or texto
+
+
+_PATRON_DOSIS = re.compile(r"(\d+(?:[.,]\d+)?)\s*(mcg|mg|g|ml|l|ui)\b", re.IGNORECASE)
+_FACTOR_UNIDAD_MG = {"mcg": 0.001, "mg": 1.0, "g": 1000.0, "ml": 1.0, "l": 1000.0, "ui": 1.0}
+
+
+def _dosis_normalizada(texto: Optional[str]) -> float:
+    """Extrae la primera cantidad+unidad de un texto tipo "Ibuprofeno
+    (400 mg)" y la normaliza a una escala comparable, para poder
+    ordenar presentaciones de menor a mayor dosis en vez de por texto
+    crudo (donde "1000mg" ordenaría antes que "200mg"). Si no reconoce
+    nada, devuelve infinito para que quede al final sin romper el
+    orden del resto."""
+    if not texto:
+        return float("inf")
+    coincidencia = _PATRON_DOSIS.search(texto)
+    if not coincidencia:
+        return float("inf")
+    valor = float(coincidencia.group(1).replace(",", "."))
+    factor = _FACTOR_UNIDAD_MG.get(coincidencia.group(2).lower(), 1.0)
+    return valor * factor
+
+
+def _clave_orden(producto: ProductoOut) -> tuple:
+    """Agrupa las opciones por principio activo (o categoría, para
+    productos que no son medicamentos) y, dentro de cada grupo, ordena
+    por dosis ascendente y luego alfabéticamente por nombre -así
+    "Ibuprofeno 200 mg" y "Ibuprofeno 400 mg" de distintos laboratorios
+    quedan agrupados y en orden, en vez de mezclados en el orden de
+    relevancia crudo de la búsqueda."""
+    base = _principio_activo_base(producto.principio_activo) or producto.categoria or producto.nombre
+    return (
+        (base or "").strip().lower(),
+        _dosis_normalizada(producto.principio_activo),
+        (producto.nombre or "").strip().lower(),
+    )
+
+
+def _sin_duplicados_y_ordenados(productos: List[ProductoOut]) -> List[ProductoOut]:
+    """Quita productos repetidos que a veces trae el catálogo de
+    Farmatodo (mismo SKU, o -si faltara el SKU- mismo nombre +
+    laboratorio + precio) y ordena el resto agrupando por principio
+    activo/dosis en vez de dejar el orden de relevancia crudo."""
+    vistos: set[str] = set()
+    unicos: List[ProductoOut] = []
+    for producto in productos:
+        clave = producto.sku or f"{producto.nombre}|{producto.laboratorio}|{producto.precio_bs}"
+        if clave in vistos:
+            continue
+        vistos.add(clave)
+        unicos.append(producto)
+    return sorted(unicos, key=_clave_orden)
+
+
+def _resumen_ia_para_opciones(productos: List[ProductoOut]) -> Optional[str]:
+    """Cuando hay varias opciones (distintas marcas/concentraciones)
+    para el mismo principio activo, genera UN solo resumen con Gemini
+    de "para qué sirve" ese principio activo -en vez de repetir un
+    resumen casi idéntico por cada opción, que multiplicaría llamadas
+    a la IA sin aportar nada distinto entre una presentación y otra-.
+    Si las opciones no comparten un principio activo dominante (p. ej.
+    resultados de tipos de producto distintos), no genera nada."""
+    bases = [
+        base
+        for p in productos
+        if (base := _principio_activo_base(p.principio_activo))
+    ]
+    if not bases:
+        return None
+    base_dominante, conteo = Counter(bases).most_common(1)[0]
+    if conteo < len(bases) / 2:
+        return None
+    return ai_resolver.generar_descripcion(base_dominante, "medicamento")
 
 
 def _candidato_a_producto_out(candidato: dict) -> ProductoOut:
@@ -288,11 +367,13 @@ async def buscar(
             or "No se encontró el producto en el catálogo de Farmatodo.",
         )
 
-    productos_out = [_candidato_a_producto_out(c) for c in candidatos]
+    productos_out = _sin_duplicados_y_ordenados([_candidato_a_producto_out(c) for c in candidatos])
 
     if len(productos_out) > 1:
-        # 3. Varias coincidencias: todas como opciones, sin límite ni
-        #    adivinar una.
+        # 3. Varias coincidencias: todas como opciones (sin duplicados,
+        #    agrupadas por principio activo/dosis), sin límite ni
+        #    adivinar una. Si comparten principio activo, se agrega un
+        #    resumen único de IA de "para qué sirve".
         return BuscarResponse(
             encontrado=True,
             origen=origen,
@@ -300,6 +381,7 @@ async def buscar(
             principio_activo_detectado=principio_activo_detectado,
             fuente=resultado["meta"]["fuente"],
             mensaje=f"Se encontraron {len(productos_out)} coincidencias en Farmatodo, elige una.",
+            resumen_ia=_resumen_ia_para_opciones(productos_out),
         )
 
     # Coincidencia única y confirmada.
@@ -318,11 +400,11 @@ async def buscar(
     termino_alternativas = _principio_activo_base(producto_out.principio_activo) or producto_out.categoria
     if not producto_out.en_stock and termino_alternativas:
         resultado_alt = await scraper_service.buscar_catalogo_real(termino_alternativas, tasas)
-        alternativas_out = [
+        alternativas_out = _sin_duplicados_y_ordenados([
             _candidato_a_producto_out(c)
             for c in resultado_alt["candidatos"]
             if c["sku"] != producto_out.sku and c["disponibilidad"]["en_stock"]
-        ]
+        ])
 
     return BuscarResponse(
         encontrado=True,

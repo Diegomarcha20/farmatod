@@ -161,6 +161,11 @@ class BuscarResponse {
   final String? fuente;
   final String? mensaje;
 
+  /// Resumen único generado por IA para todo el grupo de opciones
+  /// (no uno repetido por cada opción) cuando comparten principio
+  /// activo, ej. "para qué sirve" el Ibuprofeno en general.
+  final String? resumenIa;
+
   const BuscarResponse({
     required this.encontrado,
     required this.origen,
@@ -170,6 +175,7 @@ class BuscarResponse {
     this.alternativas = const [],
     this.fuente,
     this.mensaje,
+    this.resumenIa,
   });
 
   bool get esDetectadoPorIA => origen == 'ia_gemini';
@@ -190,6 +196,7 @@ class BuscarResponse {
           .toList(),
       fuente: json['fuente'] as String?,
       mensaje: json['mensaje'] as String?,
+      resumenIa: json['resumen_ia'] as String?,
     );
   }
 }
