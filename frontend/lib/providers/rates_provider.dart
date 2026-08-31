@@ -31,11 +31,32 @@ class RatesProvider extends ChangeNotifier {
 
   /// Calcula el bloque de precios en divisas para un precio en Bs.
   /// usando las tasas manuales actuales -mismo cálculo que el backend
-  /// (base + 3% IGTF, cada moneda con su propio modo dividir/
-  /// multiplicar), pero hecho en el propio teléfono-.
+  /// (base + 3% IGTF, cada moneda con su propio modo), hecho en el
+  /// propio teléfono-.
+  ///
+  /// Las monedas en modo [ModoTasa.multiplicarUsd] (ej. el peso
+  /// colombiano vía dólar) se resuelven en un segundo paso, a partir
+  /// del precio ya convertido a USD -por eso primero se calcula el de
+  /// USD si está configurado-. Si una moneda pide ese modo pero "USD"
+  /// no está configurado, esa moneda se omite del resultado en vez de
+  /// mostrar un precio incorrecto.
   Map<String, PrecioDivisa> calcularPrecios(double precioBs) {
-    return tasas.map(
-      (codigo, tasa) => MapEntry(codigo, PrecioDivisa.calcular(precioBs, tasa.valor, multiplicar: tasa.multiplicar)),
-    );
+    final tasaUsd = tasas['USD'];
+    final baseUsd = tasaUsd != null
+        ? (tasaUsd.modo == ModoTasa.multiplicarBs ? precioBs * tasaUsd.valor : precioBs / tasaUsd.valor)
+        : null;
+
+    final resultado = <String, PrecioDivisa>{};
+    for (final entrada in tasas.entries) {
+      final codigo = entrada.key;
+      final tasa = entrada.value;
+      if (tasa.modo == ModoTasa.multiplicarUsd) {
+        if (baseUsd == null) continue;
+        resultado[codigo] = PrecioDivisa.desdeBase(baseUsd * tasa.valor);
+      } else {
+        resultado[codigo] = PrecioDivisa.calcular(precioBs, tasa.valor, multiplicar: tasa.modo == ModoTasa.multiplicarBs);
+      }
+    }
+    return resultado;
   }
 }

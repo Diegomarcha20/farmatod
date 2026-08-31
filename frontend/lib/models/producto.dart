@@ -30,17 +30,25 @@ class PrecioDivisa {
     required this.totalConIgtf,
   });
 
+  /// Aplica el 3% de IGTF sobre un monto base ya convertido a una
+  /// divisa (sin importar cómo se haya obtenido ese monto -directo
+  /// desde Bs., o encadenado a través de otra divisa como el dólar-).
+  factory PrecioDivisa.desdeBase(double base) {
+    final igtf = base * igtfTasa;
+    return PrecioDivisa(base: base, igtf3pct: igtf, totalConIgtf: base + igtf);
+  }
+
   /// Calcula el precio en una divisa a partir del precio en Bs. y una
   /// tasa manual, con el mismo cálculo que el backend. La mayoría de
   /// las monedas se cotizan como "cuántos Bs. equivalen a 1 unidad de
   /// esa moneda" (modo dividir, el default: base = Bs./tasa) -la
-  /// convención estándar, la que usa el dólar-. El peso colombiano se
-  /// cotiza al revés en la frontera de Táchira -"cuántos pesos
-  /// equivalen a 1 Bs." (modo multiplicar: base = Bs.*tasa)-.
+  /// convención estándar, la que usa el dólar-. Para el modo
+  /// multiplicar vía dólar (ej. el peso colombiano) usa
+  /// [PrecioDivisa.desdeBase] directamente con el monto ya en esa
+  /// divisa -ver [RatesProvider.calcularPrecios]-.
   factory PrecioDivisa.calcular(double precioBs, double tasa, {bool multiplicar = false}) {
     final base = multiplicar ? precioBs * tasa : precioBs / tasa;
-    final igtf = base * igtfTasa;
-    return PrecioDivisa(base: base, igtf3pct: igtf, totalConIgtf: base + igtf);
+    return PrecioDivisa.desdeBase(base);
   }
 
   factory PrecioDivisa.fromJson(Map<String, dynamic> json) {

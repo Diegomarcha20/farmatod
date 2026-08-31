@@ -2,27 +2,45 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Una tasa de cambio Bs./divisa, con su propio modo de cálculo. La
-/// mayoría de las monedas se cotizan como "cuántos Bs. equivalen a 1
-/// unidad de esa moneda" (modo dividir, el default -la convención
-/// estándar, la que usa el dólar-). El peso colombiano se cotiza al
-/// revés en la frontera de Táchira -"cuántos pesos equivalen a 1 Bs."
-/// (modo multiplicar)-, así que cada moneda declara su propio modo en
-/// vez de asumir uno fijo para todas.
+/// Modo de cálculo de una tasa de cambio -cada moneda declara el suyo,
+/// no hay una sola convención fija para todas-.
+enum ModoTasa {
+  /// La tasa es "cuántos Bs. equivalen a 1 unidad de esa moneda" (el
+  /// estándar de mercado cambiario, ej. el dólar). base = Bs./tasa.
+  dividirBs,
+
+  /// La tasa es "cuántas unidades de esa moneda equivalen a 1 Bs.".
+  /// base = Bs.*tasa.
+  multiplicarBs,
+
+  /// La tasa es "cuántas unidades de esa moneda equivalen a 1 USD"
+  /// -así se suele conocer el peso colombiano en la frontera de
+  /// Táchira (ej. "el dólar está en 4.000 pesos"), a través del dólar
+  /// en vez de directo contra el Bs.-. base = base_en_usd*tasa.
+  /// Requiere que la moneda "USD" también esté configurada.
+  multiplicarUsd;
+
+  static ModoTasa desdeJson(String? valor) {
+    return ModoTasa.values.firstWhere((m) => m.name == valor, orElse: () => ModoTasa.dividirBs);
+  }
+}
+
+/// Una tasa de cambio Bs./divisa, con su propio modo de cálculo -ver
+/// [ModoTasa]-.
 class TasaMoneda {
-  const TasaMoneda({required this.valor, this.multiplicar = false});
+  const TasaMoneda({required this.valor, this.modo = ModoTasa.dividirBs});
 
   final double valor;
-  final bool multiplicar;
+  final ModoTasa modo;
 
   factory TasaMoneda.fromJson(Map<String, dynamic> json) {
     return TasaMoneda(
       valor: (json['valor'] as num).toDouble(),
-      multiplicar: json['multiplicar'] as bool? ?? false,
+      modo: ModoTasa.desdeJson(json['modo'] as String?),
     );
   }
 
-  Map<String, Object?> toJson() => {'valor': valor, 'multiplicar': multiplicar};
+  Map<String, Object?> toJson() => {'valor': valor, 'modo': modo.name};
 }
 
 /// Tasas de cambio Bs. -> divisa, configuradas manualmente por el
@@ -35,14 +53,16 @@ class RateConfigService {
 
   static final RateConfigService instancia = RateConfigService._interno();
 
-  static const _claveTasas = 'tasas_cambio_manual_v2';
+  static const _claveTasas = 'tasas_cambio_manual_v3';
 
   /// Valores de referencia mostrados la primera vez, antes de que el
   /// usuario configure nada en Ajustes -para que la app siga siendo
   /// útil de inmediato en vez de no mostrar ningún precio en divisas-.
+  /// El peso colombiano por defecto vía dólar, que es como normalmente
+  /// se conoce su cotización en la frontera.
   static const Map<String, TasaMoneda> tasasPorDefecto = {
     'USD': TasaMoneda(valor: 200.0),
-    'COP': TasaMoneda(valor: 16.0, multiplicar: true),
+    'COP': TasaMoneda(valor: 4000.0, modo: ModoTasa.multiplicarUsd),
   };
 
   Future<Map<String, TasaMoneda>> obtenerTasas() async {

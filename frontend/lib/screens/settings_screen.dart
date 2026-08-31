@@ -92,7 +92,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         });
         return;
       }
-      tasas[codigo.toUpperCase()] = TasaMoneda(valor: valor, multiplicar: fila.multiplicar);
+      tasas[codigo.toUpperCase()] = TasaMoneda(valor: valor, modo: fila.modo);
     }
 
     if (tasas.isEmpty) {
@@ -260,79 +260,47 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 32),
                   const Divider(),
                   const SizedBox(height: 20),
-                  Text(
-                    'Tasas de cambio',
-                    style: GoogleFonts.inter(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.primary,
-                    ),
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.currency_exchange_rounded, color: AppColors.acento, size: 18),
+                      ),
+                      const SizedBox(width: 10),
+                      Text(
+                        'Tasas de cambio',
+                        style: GoogleFonts.inter(
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                    ],
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Las pones tú manualmente, para cualquier moneda -no solo dólar y '
-                    'peso colombiano-. La mayoría se cotiza como "cuántos Bs. equivalen '
-                    'a 1 unidad de esa moneda" (÷, ej. 1 USD = Bs. 246,50 -> pon 246.50). '
-                    'El peso colombiano se cotiza al revés en la frontera de Táchira: '
-                    '"cuántos pesos equivalen a 1 Bs." (×, ej. 1 Bs. = COP 16,67 -> pon '
-                    '16.67 y marca "×"). El precio se calcula en el teléfono a partir del '
-                    'precio en Bs. de Farmatodo, agregando el 3% de IGTF.',
+                    'Las pones tú manualmente, para cualquier moneda. El precio en cada '
+                    'una se calcula en el teléfono a partir del precio en Bs. de '
+                    'Farmatodo, agregando el 3% de IGTF -no depende del backend-.',
                     style: GoogleFonts.inter(
                       fontSize: 13,
                       height: 1.45,
                       color: AppColors.primary.withValues(alpha: 0.6),
                     ),
                   ),
-                  const SizedBox(height: 16),
-                  ..._filasTasas.map(
-                    (fila) => Padding(
-                      padding: const EdgeInsets.only(bottom: 14),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              SizedBox(
-                                width: 90,
-                                child: TextField(
-                                  controller: fila.codigoController,
-                                  textCapitalization: TextCapitalization.characters,
-                                  style: GoogleFonts.inter(fontSize: 15),
-                                  decoration: const InputDecoration(labelText: 'Moneda', hintText: 'USD'),
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: TextField(
-                                  controller: fila.tasaController,
-                                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                                  style: GoogleFonts.inter(fontSize: 15),
-                                  decoration: const InputDecoration(labelText: 'Tasa', hintText: '246.50'),
-                                ),
-                              ),
-                              IconButton(
-                                onPressed: () => _quitarFilaTasa(fila),
-                                icon: const Icon(Icons.close_rounded),
-                                color: AppColors.primary.withValues(alpha: 0.4),
-                                tooltip: 'Quitar',
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 6),
-                          SegmentedButton<bool>(
-                            segments: const [
-                              ButtonSegment(value: false, label: Text('÷ Bs. por unidad (ej. USD)')),
-                              ButtonSegment(value: true, label: Text('× unidades por Bs. (ej. COP)')),
-                            ],
-                            selected: {fila.multiplicar},
-                            onSelectionChanged: (seleccion) => setState(() => fila.multiplicar = seleccion.first),
-                            style: const ButtonStyle(visualDensity: VisualDensity.compact),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+                  const SizedBox(height: 18),
+                  ..._filasTasas.map((fila) => _TarjetaFilaTasa(
+                        fila: fila,
+                        hayUsdConfigurado: _filasTasas.any(
+                          (f) => f != fila && f.codigoController.text.trim().toUpperCase() == 'USD',
+                        ),
+                        onCambio: () => setState(() {}),
+                        onQuitar: _filasTasas.length > 1 ? () => _quitarFilaTasa(fila) : null,
+                      )),
                   OutlinedButton.icon(
                     onPressed: _agregarFilaTasa,
                     icon: const Icon(Icons.add_rounded),
@@ -374,13 +342,183 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 }
 
+/// Tarjeta de una moneda en Ajustes: código + tasa + modo de cálculo,
+/// con una vista previa en texto plano de cómo se va a interpretar
+/// -para que el usuario confirme de un vistazo que la puso bien, sin
+/// tener que hacer la cuenta mentalmente-.
+class _TarjetaFilaTasa extends StatelessWidget {
+  const _TarjetaFilaTasa({
+    required this.fila,
+    required this.hayUsdConfigurado,
+    required this.onCambio,
+    required this.onQuitar,
+  });
+
+  final _FilaTasa fila;
+  final bool hayUsdConfigurado;
+  final VoidCallback onCambio;
+  final VoidCallback? onQuitar;
+
+  String get _codigo {
+    final texto = fila.codigoController.text.trim().toUpperCase();
+    return texto.isEmpty ? '???' : texto;
+  }
+
+  String get _vistaPrevia {
+    final valor = double.tryParse(fila.tasaController.text.trim().replaceAll(',', '.'));
+    final valorTexto = valor == null ? '—' : valor.toString();
+    switch (fila.modo) {
+      case ModoTasa.dividirBs:
+        return '1 $_codigo = Bs. $valorTexto';
+      case ModoTasa.multiplicarBs:
+        return '1 Bs. = $valorTexto $_codigo';
+      case ModoTasa.multiplicarUsd:
+        return '1 USD = $valorTexto $_codigo';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final requiereUsd = fila.modo == ModoTasa.multiplicarUsd && !hayUsdConfigurado;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: const Color(0xFFE2E8F0)),
+        boxShadow: [
+          BoxShadow(color: AppColors.primary.withValues(alpha: 0.04), blurRadius: 10, offset: const Offset(0, 3)),
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: AppColors.acento.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    _codigo.characters.take(3).toString(),
+                    style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w800, color: AppColors.primary),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextField(
+                    controller: fila.codigoController,
+                    textCapitalization: TextCapitalization.characters,
+                    onChanged: (_) => onCambio(),
+                    style: GoogleFonts.inter(fontSize: 15, fontWeight: FontWeight.w600),
+                    decoration: const InputDecoration(labelText: 'Moneda', hintText: 'USD'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: TextField(
+                    controller: fila.tasaController,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    onChanged: (_) => onCambio(),
+                    style: GoogleFonts.inter(fontSize: 15),
+                    decoration: const InputDecoration(labelText: 'Tasa', hintText: '246.50'),
+                  ),
+                ),
+                if (onQuitar != null)
+                  IconButton(
+                    onPressed: onQuitar,
+                    icon: const Icon(Icons.close_rounded),
+                    color: AppColors.primary.withValues(alpha: 0.4),
+                    tooltip: 'Quitar',
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<ModoTasa>(
+              initialValue: fila.modo,
+              isExpanded: true,
+              style: GoogleFonts.inter(fontSize: 13, color: AppColors.primary),
+              decoration: const InputDecoration(labelText: 'Se calcula'),
+              items: const [
+                DropdownMenuItem(
+                  value: ModoTasa.dividirBs,
+                  child: Text('÷ Bs. por unidad (estándar, ej. USD)'),
+                ),
+                DropdownMenuItem(
+                  value: ModoTasa.multiplicarBs,
+                  child: Text('× unidades por Bs.'),
+                ),
+                DropdownMenuItem(
+                  value: ModoTasa.multiplicarUsd,
+                  child: Text('× unidades por USD (ej. peso colombiano)'),
+                ),
+              ],
+              onChanged: (nuevoModo) {
+                if (nuevoModo != null) fila.modo = nuevoModo;
+                onCambio();
+              },
+            ),
+            const SizedBox(height: 10),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppColors.fondo,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.calculate_outlined, size: 14, color: AppColors.primary.withValues(alpha: 0.5)),
+                  const SizedBox(width: 6),
+                  Text(
+                    _vistaPrevia,
+                    style: GoogleFonts.inter(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: AppColors.primary.withValues(alpha: 0.7),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            if (requiereUsd) ...[
+              const SizedBox(height: 8),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.warning_amber_rounded, size: 14, color: Color(0xFFB45309)),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Necesitas también una moneda "USD" configurada para poder calcular esta.',
+                      style: GoogleFonts.inter(fontSize: 11.5, color: const Color(0xFFB45309), height: 1.3),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 /// Fila editable de la tabla de tasas de cambio en Ajustes: un
 /// controlador para el código de moneda, otro para el valor de la
-/// tasa, y el modo de cálculo (dividir/multiplicar). Se identifica por
+/// tasa, y el modo de cálculo (ver [ModoTasa]). Se identifica por
 /// instancia (no por índice) para que agregar/quitar filas no
 /// desordene qué controlador pertenece a cuál.
 class _FilaTasa {
-  _FilaTasa({required this.codigoController, required this.tasaController, this.multiplicar = false});
+  _FilaTasa({required this.codigoController, required this.tasaController, this.modo = ModoTasa.dividirBs});
 
   factory _FilaTasa.vacia() => _FilaTasa(
         codigoController: TextEditingController(),
@@ -390,12 +528,12 @@ class _FilaTasa {
   factory _FilaTasa.desde(String codigo, TasaMoneda tasa) => _FilaTasa(
         codigoController: TextEditingController(text: codigo),
         tasaController: TextEditingController(text: tasa.valor.toString()),
-        multiplicar: tasa.multiplicar,
+        modo: tasa.modo,
       );
 
   final TextEditingController codigoController;
   final TextEditingController tasaController;
-  bool multiplicar;
+  ModoTasa modo;
 
   void dispose() {
     codigoController.dispose();

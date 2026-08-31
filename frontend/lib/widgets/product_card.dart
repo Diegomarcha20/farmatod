@@ -81,13 +81,11 @@ class ProductCard extends StatelessWidget {
     // El precio en divisas se calcula en el teléfono con las tasas que
     // el usuario configuró manualmente en Ajustes (no con las que
     // devuelve el backend) -así cada dispositivo puede tener su propia
-    // tasa del día-. Se muestra una sola divisa de referencia en la
-    // tarjeta compacta (USD si está configurada, si no la primera que
-    // haya); la ficha completa del resultado sí muestra todas.
+    // tasa del día-. Se muestran TODAS las divisas configuradas
+    // directamente en la tarjeta de la lista, sin tener que entrar al
+    // producto para verlas.
     final precios = context.watch<RatesProvider>().calcularPrecios(producto.precioBs);
-    final codigosDivisa = precios.keys.toList();
-    final codigoReferencia = codigosDivisa.contains('USD') ? 'USD' : (codigosDivisa.isNotEmpty ? codigosDivisa.first : null);
-    final divisaReferencia = codigoReferencia != null ? precios[codigoReferencia] : null;
+    final resumenDivisas = precios.entries.map((e) => '${e.value.totalConIgtf.toStringAsFixed(2)} ${e.key}').join('  ·  ');
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -164,30 +162,27 @@ class ProductCard extends StatelessWidget {
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Bs. ${producto.precioBs.toStringAsFixed(2)}',
-                              style: GoogleFonts.inter(
-                                fontSize: 15,
-                                fontWeight: FontWeight.w700,
-                                color: AppColors.primary,
-                              ),
-                            ),
-                            if (divisaReferencia != null)
-                              Text(
-                                '≈ ${divisaReferencia.totalConIgtf.toStringAsFixed(2)} $codigoReferencia',
-                                style: GoogleFonts.inter(
-                                  fontSize: 11,
-                                  color: AppColors.primary.withValues(alpha: 0.5),
-                                ),
-                              ),
-                          ],
+                        Text(
+                          'Bs. ${producto.precioBs.toStringAsFixed(2)}',
+                          style: GoogleFonts.inter(
+                            fontSize: 15,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.primary,
+                          ),
                         ),
                         StockBadge(enStock: producto.enStock, compacto: true),
                       ],
                     ),
+                    if (resumenDivisas.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        '≈ $resumenDivisas',
+                        style: GoogleFonts.inter(
+                          fontSize: 11,
+                          color: AppColors.primary.withValues(alpha: 0.5),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),
