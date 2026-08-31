@@ -9,13 +9,16 @@ de precios (Bs. + cualquier moneda configurada, con IGTF) ya calculada.
 Uso:
     python test_scraper.py
     python test_scraper.py "ibuprofeno 400"
-    python test_scraper.py "paracetamol" --tasas "USD:246.50,COP:16.67,EUR:268.30"
+    python test_scraper.py "paracetamol" --tasas "USD:246.50,COP*16.67,EUR:268.30"
 
 Las tasas de cambio son configurables por línea de comandos (cualquier
 cantidad de monedas, no solo USD/COP); si se omiten, se usan valores de
 ejemplo indicados explícitamente en pantalla (reemplázalos por las
-tasas vigentes el día que ejecutes la prueba). Cada tasa es "cuántos
-Bs. equivalen a 1 unidad de esa moneda".
+tasas vigentes el día que ejecutes la prueba). El separador de cada
+par indica el modo de cálculo: ":" o "=" es "cuántos Bs. equivalen a 1
+unidad de esa moneda" (dividir); "*" es "cuántas unidades de esa
+moneda equivalen a 1 Bs." (multiplicar, así se cotiza el peso
+colombiano en la frontera de Táchira).
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ import sys
 from currency_converter import TasaInvalidaError, TasasConfiguracion
 from scraper_service import FarmatodoScraper, TiendaObjetivo
 
-TASAS_EJEMPLO = "USD:246.50,COP:16.67"
+TASAS_EJEMPLO = "USD:246.50,COP*16.67"
 
 
 def _parsear_argumentos() -> argparse.Namespace:
@@ -45,7 +48,7 @@ def _parsear_argumentos() -> argparse.Namespace:
         "--tasas",
         type=str,
         default=TASAS_EJEMPLO,
-        help='Tasas de cambio, formato "USD:246.50,COP:16.67,EUR:268.30" (cualquier moneda).',
+        help='Tasas de cambio, formato "USD:246.50,COP*16.67,EUR:268.30" (":" divide, "*" multiplica).',
     )
     return parser.parse_args()
 
@@ -130,7 +133,10 @@ def main() -> int:
         print(f"Error de configuración de tasas: {exc}", file=sys.stderr)
         return 1
 
-    resumen_tasas = " | ".join(f"1 {codigo} = {tasa} Bs." for codigo, tasa in tasas.tasas.items())
+    resumen_tasas = " | ".join(
+        (f"1 Bs. = {tasa.valor} {codigo}" if tasa.multiplicar else f"1 {codigo} = {tasa.valor} Bs.")
+        for codigo, tasa in tasas.tasas.items()
+    )
     print(f"(Tasas usadas: {resumen_tasas})\n")
 
     try:

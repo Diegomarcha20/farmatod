@@ -69,13 +69,16 @@ def verificar_acceso(x_app_key: Optional[str] = Header(default=None)) -> None:
 
 # Tasas de cambio para el motor multidivisa (ver currency_converter.py).
 # 100% manuales: se configuran con la variable de entorno TASAS_CAMBIO,
-# formato "USD:246.50,COP:16.67" -cada número es "cuántos Bs. equivalen
-# a 1 unidad de esa moneda"-. Agregar o quitar una moneda es editar esa
-# variable, sin tocar código. Si no está configurada, se usa un valor
-# de referencia aproximado -para que la búsqueda de producto siga
-# funcionando igual, aunque el precio en divisas no sea exacto- en vez
-# de tumbar el endpoint.
-_TASAS_FALLBACK = "USD:200,COP:16"
+# formato "USD:246.50,COP*16.67" -":" (o "=") significa "cuántos Bs.
+# equivalen a 1 unidad de esa moneda" (dividir, la convención estándar
+# del dólar); "*" significa "cuántas unidades de esa moneda equivalen
+# a 1 Bs." (multiplicar, así se cotiza el peso colombiano en la
+# frontera)-. Agregar o quitar una moneda es editar esa variable, sin
+# tocar código. Si no está configurada, se usa un valor de referencia
+# aproximado -para que la búsqueda de producto siga funcionando igual,
+# aunque el precio en divisas no sea exacto- en vez de tumbar el
+# endpoint.
+_TASAS_FALLBACK = "USD:200,COP*16"
 
 
 def _tasas_actuales() -> TasasConfiguracion:
@@ -84,7 +87,7 @@ def _tasas_actuales() -> TasasConfiguracion:
     except TasaInvalidaError as exc:
         logger.warning(
             "Tasas de cambio no configuradas (%s); usando valores de referencia "
-            "aproximados. Define TASAS_CAMBIO (ej. \"USD:246.50,COP:16.67\") para "
+            "aproximados. Define TASAS_CAMBIO (ej. \"USD:246.50,COP*16.67\") para "
             "precios reales.",
             exc,
         )

@@ -14,7 +14,7 @@ class RatesProvider extends ChangeNotifier {
 
   final RateConfigService _config;
 
-  Map<String, double> tasas = Map<String, double>.from(RateConfigService.tasasPorDefecto);
+  Map<String, TasaMoneda> tasas = Map<String, TasaMoneda>.from(RateConfigService.tasasPorDefecto);
   bool cargando = true;
 
   Future<void> _cargar() async {
@@ -23,7 +23,7 @@ class RatesProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> guardar(Map<String, double> nuevasTasas) async {
+  Future<void> guardar(Map<String, TasaMoneda> nuevasTasas) async {
     await _config.guardarTasas(nuevasTasas);
     tasas = await _config.obtenerTasas();
     notifyListeners();
@@ -31,8 +31,11 @@ class RatesProvider extends ChangeNotifier {
 
   /// Calcula el bloque de precios en divisas para un precio en Bs.
   /// usando las tasas manuales actuales -mismo cálculo que el backend
-  /// (base + 3% IGTF), pero hecho en el propio teléfono-.
+  /// (base + 3% IGTF, cada moneda con su propio modo dividir/
+  /// multiplicar), pero hecho en el propio teléfono-.
   Map<String, PrecioDivisa> calcularPrecios(double precioBs) {
-    return tasas.map((codigo, tasa) => MapEntry(codigo, PrecioDivisa.calcular(precioBs, tasa)));
+    return tasas.map(
+      (codigo, tasa) => MapEntry(codigo, PrecioDivisa.calcular(precioBs, tasa.valor, multiplicar: tasa.multiplicar)),
+    );
   }
 }

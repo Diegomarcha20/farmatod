@@ -31,11 +31,14 @@ class PrecioDivisa {
   });
 
   /// Calcula el precio en una divisa a partir del precio en Bs. y una
-  /// tasa manual ("cuántos Bs. equivalen a 1 unidad de esa moneda"),
-  /// con el mismo cálculo que el backend: base = Bs./tasa, IGTF =
-  /// base*3%, total = base+IGTF.
-  factory PrecioDivisa.calcular(double precioBs, double tasa) {
-    final base = precioBs / tasa;
+  /// tasa manual, con el mismo cálculo que el backend. La mayoría de
+  /// las monedas se cotizan como "cuántos Bs. equivalen a 1 unidad de
+  /// esa moneda" (modo dividir, el default: base = Bs./tasa) -la
+  /// convención estándar, la que usa el dólar-. El peso colombiano se
+  /// cotiza al revés en la frontera de Táchira -"cuántos pesos
+  /// equivalen a 1 Bs." (modo multiplicar: base = Bs.*tasa)-.
+  factory PrecioDivisa.calcular(double precioBs, double tasa, {bool multiplicar = false}) {
+    final base = multiplicar ? precioBs * tasa : precioBs / tasa;
     final igtf = base * igtfTasa;
     return PrecioDivisa(base: base, igtf3pct: igtf, totalConIgtf: base + igtf);
   }

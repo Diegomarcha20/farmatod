@@ -78,7 +78,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _guardarTasas() async {
-    final tasas = <String, double>{};
+    final tasas = <String, TasaMoneda>{};
     for (final fila in _filasTasas) {
       final codigo = fila.codigoController.text.trim();
       final texto = fila.tasaController.text.trim();
@@ -92,7 +92,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
         });
         return;
       }
-      tasas[codigo.toUpperCase()] = valor;
+      tasas[codigo.toUpperCase()] = TasaMoneda(valor: valor, multiplicar: fila.multiplicar);
     }
 
     if (tasas.isEmpty) {
@@ -271,10 +271,12 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 8),
                   Text(
                     'Las pones tú manualmente, para cualquier moneda -no solo dólar y '
-                    'peso colombiano-. Cada tasa es "cuántos Bs. equivalen a 1 unidad '
-                    'de esa moneda" (ej. si 1 USD = Bs. 246,50, pon 246.50). El precio '
-                    'en cada divisa se calcula en el teléfono a partir del precio en '
-                    'Bs. de Farmatodo, agregando el 3% de IGTF.',
+                    'peso colombiano-. La mayoría se cotiza como "cuántos Bs. equivalen '
+                    'a 1 unidad de esa moneda" (÷, ej. 1 USD = Bs. 246,50 -> pon 246.50). '
+                    'El peso colombiano se cotiza al revés en la frontera de Táchira: '
+                    '"cuántos pesos equivalen a 1 Bs." (×, ej. 1 Bs. = COP 16,67 -> pon '
+                    '16.67 y marca "×"). El precio se calcula en el teléfono a partir del '
+                    'precio en Bs. de Farmatodo, agregando el 3% de IGTF.',
                     style: GoogleFonts.inter(
                       fontSize: 13,
                       height: 1.45,
@@ -284,33 +286,48 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SizedBox(height: 16),
                   ..._filasTasas.map(
                     (fila) => Padding(
-                      padding: const EdgeInsets.only(bottom: 10),
-                      child: Row(
+                      padding: const EdgeInsets.only(bottom: 14),
+                      child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          SizedBox(
-                            width: 90,
-                            child: TextField(
-                              controller: fila.codigoController,
-                              textCapitalization: TextCapitalization.characters,
-                              style: GoogleFonts.inter(fontSize: 15),
-                              decoration: const InputDecoration(labelText: 'Moneda', hintText: 'USD'),
-                            ),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              SizedBox(
+                                width: 90,
+                                child: TextField(
+                                  controller: fila.codigoController,
+                                  textCapitalization: TextCapitalization.characters,
+                                  style: GoogleFonts.inter(fontSize: 15),
+                                  decoration: const InputDecoration(labelText: 'Moneda', hintText: 'USD'),
+                                ),
+                              ),
+                              const SizedBox(width: 10),
+                              Expanded(
+                                child: TextField(
+                                  controller: fila.tasaController,
+                                  keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                                  style: GoogleFonts.inter(fontSize: 15),
+                                  decoration: const InputDecoration(labelText: 'Tasa', hintText: '246.50'),
+                                ),
+                              ),
+                              IconButton(
+                                onPressed: () => _quitarFilaTasa(fila),
+                                icon: const Icon(Icons.close_rounded),
+                                color: AppColors.primary.withValues(alpha: 0.4),
+                                tooltip: 'Quitar',
+                              ),
+                            ],
                           ),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: TextField(
-                              controller: fila.tasaController,
-                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                              style: GoogleFonts.inter(fontSize: 15),
-                              decoration: const InputDecoration(labelText: 'Tasa (Bs.)', hintText: '246.50'),
-                            ),
-                          ),
-                          IconButton(
-                            onPressed: () => _quitarFilaTasa(fila),
-                            icon: const Icon(Icons.close_rounded),
-                            color: AppColors.primary.withValues(alpha: 0.4),
-                            tooltip: 'Quitar',
+                          const SizedBox(height: 6),
+                          SegmentedButton<bool>(
+                            segments: const [
+                              ButtonSegment(value: false, label: Text('÷ Bs. por unidad (ej. USD)')),
+                              ButtonSegment(value: true, label: Text('× unidades por Bs. (ej. COP)')),
+                            ],
+                            selected: {fila.multiplicar},
+                            onSelectionChanged: (seleccion) => setState(() => fila.multiplicar = seleccion.first),
+                            style: const ButtonStyle(visualDensity: VisualDensity.compact),
                           ),
                         ],
                       ),
@@ -358,24 +375,27 @@ class _SettingsScreenState extends State<SettingsScreen> {
 }
 
 /// Fila editable de la tabla de tasas de cambio en Ajustes: un
-/// controlador para el código de moneda y otro para el valor de la
-/// tasa. Se identifica por instancia (no por índice) para que
-/// agregar/quitar filas no desordene qué controlador pertenece a cuál.
+/// controlador para el código de moneda, otro para el valor de la
+/// tasa, y el modo de cálculo (dividir/multiplicar). Se identifica por
+/// instancia (no por índice) para que agregar/quitar filas no
+/// desordene qué controlador pertenece a cuál.
 class _FilaTasa {
-  _FilaTasa({required this.codigoController, required this.tasaController});
+  _FilaTasa({required this.codigoController, required this.tasaController, this.multiplicar = false});
 
   factory _FilaTasa.vacia() => _FilaTasa(
         codigoController: TextEditingController(),
         tasaController: TextEditingController(),
       );
 
-  factory _FilaTasa.desde(String codigo, double tasa) => _FilaTasa(
+  factory _FilaTasa.desde(String codigo, TasaMoneda tasa) => _FilaTasa(
         codigoController: TextEditingController(text: codigo),
-        tasaController: TextEditingController(text: tasa.toString()),
+        tasaController: TextEditingController(text: tasa.valor.toString()),
+        multiplicar: tasa.multiplicar,
       );
 
   final TextEditingController codigoController;
   final TextEditingController tasaController;
+  bool multiplicar;
 
   void dispose() {
     codigoController.dispose();
