@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 
 import '../main.dart';
+import '../providers/rates_provider.dart';
+import '../services/rate_config_service.dart';
 import '../services/server_config_service.dart';
 
 /// Pantalla de Ajustes: configura la dirección del backend (y, si el
@@ -21,12 +24,16 @@ class SettingsScreen extends StatefulWidget {
 
 class _SettingsScreenState extends State<SettingsScreen> {
   final _config = ServerConfigService.instancia;
+  final _rateConfig = RateConfigService.instancia;
   final _urlController = TextEditingController();
   final _codigoController = TextEditingController();
+  final List<_FilaTasa> _filasTasas = [];
 
   bool _cargando = true;
   bool _probando = false;
   bool _guardando = false;
+  bool _guardandoTasas = false;
+  String? _errorTasas;
   PruebaConexion? _resultadoPrueba;
 
   @override
@@ -39,18 +46,72 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _urlController.dispose();
     _codigoController.dispose();
+    for (final fila in _filasTasas) {
+      fila.dispose();
+    }
     super.dispose();
   }
 
   Future<void> _cargarValoresActuales() async {
     final url = await _config.obtenerUrlBase();
     final codigo = await _config.obtenerCodigoAcceso();
+    final tasas = await _rateConfig.obtenerTasas();
     if (!mounted) return;
     setState(() {
       _urlController.text = url ?? '';
       _codigoController.text = codigo ?? '';
+      _filasTasas.addAll(tasas.entries.map((e) => _FilaTasa.desde(e.key, e.value)));
+      if (_filasTasas.isEmpty) _filasTasas.add(_FilaTasa.vacia());
       _cargando = false;
     });
+  }
+
+  void _agregarFilaTasa() {
+    setState(() => _filasTasas.add(_FilaTasa.vacia()));
+  }
+
+  void _quitarFilaTasa(_FilaTasa fila) {
+    setState(() {
+      _filasTasas.remove(fila);
+      fila.dispose();
+    });
+  }
+
+  Future<void> _guardarTasas() async {
+    final tasas = <String, double>{};
+    for (final fila in _filasTasas) {
+      final codigo = fila.codigoController.text.trim();
+      final texto = fila.tasaController.text.trim();
+      if (codigo.isEmpty && texto.isEmpty) continue;
+
+      final valor = double.tryParse(texto.replaceAll(',', '.'));
+      if (codigo.isEmpty || valor == null || valor <= 0) {
+        setState(() {
+          _errorTasas = 'Revisa la fila "$codigo": el código no puede estar vacío y la '
+              'tasa debe ser un número mayor a 0.';
+        });
+        return;
+      }
+      tasas[codigo.toUpperCase()] = valor;
+    }
+
+    if (tasas.isEmpty) {
+      setState(() => _errorTasas = 'Agrega al menos una moneda con su tasa.');
+      return;
+    }
+
+    setState(() {
+      _errorTasas = null;
+      _guardandoTasas = true;
+    });
+
+    await context.read<RatesProvider>().guardar(tasas);
+
+    if (!mounted) return;
+    setState(() => _guardandoTasas = false);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Tasas de cambio guardadas.')),
+    );
   }
 
   Future<void> _probarConexion() async {
@@ -107,7 +168,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Ajustes de conexión')),
+      appBar: AppBar(title: const Text('Ajustes')),
       body: _cargando
           ? const Center(child: CircularProgressIndicator(color: AppColors.acento))
           : SafeArea(
@@ -196,10 +257,129 @@ class _SettingsScreenState extends State<SettingsScreen> {
                           : const Text('Guardar'),
                     ),
                   ),
+                  const SizedBox(height: 32),
+                  const Divider(),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Tasas de cambio',
+                    style: GoogleFonts.inter(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: AppColors.primary,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Las pones tú manualmente, para cualquier moneda -no solo dólar y '
+                    'peso colombiano-. Cada tasa es "cuántos Bs. equivalen a 1 unidad '
+                    'de esa moneda" (ej. si 1 USD = Bs. 246,50, pon 246.50). El precio '
+                    'en cada divisa se calcula en el teléfono a partir del precio en '
+                    'Bs. de Farmatodo, agregando el 3% de IGTF.',
+                    style: GoogleFonts.inter(
+                      fontSize: 13,
+                      height: 1.45,
+                      color: AppColors.primary.withValues(alpha: 0.6),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  ..._filasTasas.map(
+                    (fila) => Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          SizedBox(
+                            width: 90,
+                            child: TextField(
+                              controller: fila.codigoController,
+                              textCapitalization: TextCapitalization.characters,
+                              style: GoogleFonts.inter(fontSize: 15),
+                              decoration: const InputDecoration(labelText: 'Moneda', hintText: 'USD'),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: TextField(
+                              controller: fila.tasaController,
+                              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                              style: GoogleFonts.inter(fontSize: 15),
+                              decoration: const InputDecoration(labelText: 'Tasa (Bs.)', hintText: '246.50'),
+                            ),
+                          ),
+                          IconButton(
+                            onPressed: () => _quitarFilaTasa(fila),
+                            icon: const Icon(Icons.close_rounded),
+                            color: AppColors.primary.withValues(alpha: 0.4),
+                            tooltip: 'Quitar',
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed: _agregarFilaTasa,
+                    icon: const Icon(Icons.add_rounded),
+                    label: const Text('Agregar moneda'),
+                  ),
+                  if (_errorTasas != null) ...[
+                    const SizedBox(height: 14),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppColors.stockAgotado.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppColors.stockAgotado.withValues(alpha: 0.3)),
+                      ),
+                      child: Text(
+                        _errorTasas!,
+                        style: GoogleFonts.inter(fontSize: 13, color: AppColors.stockAgotado, height: 1.35),
+                      ),
+                    ),
+                  ],
+                  const SizedBox(height: 16),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _guardandoTasas ? null : _guardarTasas,
+                      child: _guardandoTasas
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Text('Guardar tasas'),
+                    ),
+                  ),
                 ],
               ),
             ),
     );
+  }
+}
+
+/// Fila editable de la tabla de tasas de cambio en Ajustes: un
+/// controlador para el código de moneda y otro para el valor de la
+/// tasa. Se identifica por instancia (no por índice) para que
+/// agregar/quitar filas no desordene qué controlador pertenece a cuál.
+class _FilaTasa {
+  _FilaTasa({required this.codigoController, required this.tasaController});
+
+  factory _FilaTasa.vacia() => _FilaTasa(
+        codigoController: TextEditingController(),
+        tasaController: TextEditingController(),
+      );
+
+  factory _FilaTasa.desde(String codigo, double tasa) => _FilaTasa(
+        codigoController: TextEditingController(text: codigo),
+        tasaController: TextEditingController(text: tasa.toString()),
+      );
+
+  final TextEditingController codigoController;
+  final TextEditingController tasaController;
+
+  void dispose() {
+    codigoController.dispose();
+    tasaController.dispose();
   }
 }
 

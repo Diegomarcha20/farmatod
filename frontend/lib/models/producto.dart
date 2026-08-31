@@ -11,6 +11,13 @@
 
 import 'dart:convert';
 
+/// Impuesto a las Grandes Transacciones Financieras: 3% sobre pagos en
+/// divisas vigente en Venezuela. Misma constante que usa el backend
+/// (`currency_converter.py`); se duplica aquí porque el cálculo con
+/// tasas manuales locales (ver [RateConfigService]) se hace en el
+/// propio teléfono, sin ida y vuelta al servidor.
+const double igtfTasa = 0.03;
+
 /// Precio ya convertido a una divisa concreta (con y sin IGTF).
 class PrecioDivisa {
   final double base;
@@ -22,6 +29,16 @@ class PrecioDivisa {
     required this.igtf3pct,
     required this.totalConIgtf,
   });
+
+  /// Calcula el precio en una divisa a partir del precio en Bs. y una
+  /// tasa manual ("cuántos Bs. equivalen a 1 unidad de esa moneda"),
+  /// con el mismo cálculo que el backend: base = Bs./tasa, IGTF =
+  /// base*3%, total = base+IGTF.
+  factory PrecioDivisa.calcular(double precioBs, double tasa) {
+    final base = precioBs / tasa;
+    final igtf = base * igtfTasa;
+    return PrecioDivisa(base: base, igtf3pct: igtf, totalConIgtf: base + igtf);
+  }
 
   factory PrecioDivisa.fromJson(Map<String, dynamic> json) {
     return PrecioDivisa(

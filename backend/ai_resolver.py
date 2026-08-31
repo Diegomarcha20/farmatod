@@ -32,7 +32,12 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
 
 _client: genai.Client | None = None
 if GEMINI_API_KEY:
-    _client = genai.Client(api_key=GEMINI_API_KEY)
+    # Timeout explícito: sin esto, una llamada a Gemini que se cuelga
+    # (red lenta, el propio servicio de Google degradado) podía
+    # retener la respuesta de /buscar indefinidamente. Acotado a 12s
+    # -generoso para una respuesta normal, pero sin dejar la búsqueda
+    # colgada por un dato de IA que de todas formas es opcional-.
+    _client = genai.Client(api_key=GEMINI_API_KEY, http_options=types.HttpOptions(timeout=12000))
 
 # Evita volver a llamar a Gemini si la misma consulta en lenguaje
 # natural ya se resolvió hace menos de 30 minutos: ahorra latencia

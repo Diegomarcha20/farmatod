@@ -36,6 +36,7 @@ es un dato de la tienda física propia, que Farmatodo no expone para
 terceros) -el campo queda presente en el esquema pero vacío-.
 """
 
+import asyncio
 import logging
 import os
 import re
@@ -237,7 +238,7 @@ def _sin_duplicados_y_ordenados(productos: List[ProductoOut]) -> List[ProductoOu
     return sorted(unicos, key=_clave_orden)
 
 
-def _resumen_ia_para_opciones(productos: List[ProductoOut]) -> Optional[str]:
+async def _resumen_ia_para_opciones(productos: List[ProductoOut]) -> Optional[str]:
     """Cuando hay varias opciones (distintas marcas/concentraciones)
     para el mismo principio activo, genera UN solo resumen con Gemini
     de "para qué sirve" ese principio activo -en vez de repetir un
@@ -255,7 +256,12 @@ def _resumen_ia_para_opciones(productos: List[ProductoOut]) -> Optional[str]:
     base_dominante, conteo = Counter(bases).most_common(1)[0]
     if conteo < len(bases) / 2:
         return None
-    return ai_resolver.generar_descripcion(base_dominante, "medicamento")
+    # `generar_descripcion` es una llamada SÍNCRONA a la API de Gemini;
+    # despachada a un hilo aparte para no bloquear el event loop de
+    # FastAPI mientras espera -si no, cualquier otra petición
+    # concurrente (de otro empleado, u otra búsqueda del mismo) se
+    # quedaría esperando detrás de esta llamada a IA.
+    return await asyncio.to_thread(ai_resolver.generar_descripcion, base_dominante, "medicamento")
 
 
 def _candidato_a_producto_out(candidato: dict) -> ProductoOut:
@@ -276,22 +282,25 @@ def _candidato_a_producto_out(candidato: dict) -> ProductoOut:
     )
 
 
-def _completar_ficha_medica(producto_out: ProductoOut) -> ProductoOut:
+async def _completar_ficha_medica(producto_out: ProductoOut) -> ProductoOut:
     """Rellena `descripcion` y `pais_origen` con Gemini cuando Farmatodo
     no los trae -que es prácticamente siempre, ya que su catálogo no
     incluye "para qué sirve" ni el país del laboratorio-. Se llama
     únicamente sobre el producto ya confirmado (no por cada opción de
-    una lista), para no multiplicar llamadas a la IA."""
+    una lista), para no multiplicar llamadas a la IA. Las llamadas a
+    Gemini se despachan a un hilo aparte (`asyncio.to_thread`) porque
+    son síncronas y, si no, bloquearían el event loop de FastAPI para
+    TODAS las peticiones concurrentes mientras esperan la respuesta."""
     actualizaciones: dict = {}
     pista_para_ia = producto_out.principio_activo or producto_out.categoria or producto_out.nombre
 
     if not producto_out.descripcion:
-        descripcion = ai_resolver.generar_descripcion(producto_out.nombre, pista_para_ia)
+        descripcion = await asyncio.to_thread(ai_resolver.generar_descripcion, producto_out.nombre, pista_para_ia)
         if descripcion:
             actualizaciones["descripcion"] = descripcion
 
     if producto_out.laboratorio and not producto_out.pais_origen:
-        origen = ai_resolver.identificar_origen_laboratorio(producto_out.laboratorio)
+        origen = await asyncio.to_thread(ai_resolver.identificar_origen_laboratorio, producto_out.laboratorio)
         if origen:
             actualizaciones["pais_origen"] = origen
 
@@ -317,6 +326,50 @@ def estadisticas_cache() -> dict:
         "ia": ai_resolver.estadisticas_cache(),
         "farmatodo": scraper_service.estadisticas_cache(),
     }
+
+
+async def _respuesta_para_producto_confirmado(
+    producto_out: ProductoOut,
+    tasas: TasasConfiguracion,
+    origen: str,
+    principio_activo_detectado: Optional[str],
+    fuente: str,
+) -> BuscarResponse:
+    """Termina de armar la respuesta para un producto YA confirmado (sin
+    ambigüedad: o vino de una búsqueda con un solo candidato, o el
+    usuario ya eligió uno por SKU exacto en `/producto/{sku}`).
+    Compartido entre `/buscar` y `/producto/{sku}` para no duplicar los
+    pasos 4 y 5 (completar ficha con IA, buscar alternativas si está
+    agotado)."""
+    principio_activo_detectado = producto_out.principio_activo or principio_activo_detectado
+
+    # 4. Completar ficha médica (descripción/origen) con IA.
+    producto_out = await _completar_ficha_medica(producto_out)
+
+    # 5. Si está agotado, buscar alternativas reales: por el mismo
+    #    principio activo si es un medicamento (sin la dosis específica,
+    #    para no limitar de más), o por la misma categoría si es
+    #    cualquier otro tipo de producto (Farmatodo no vende solo
+    #    medicinas).
+    alternativas_out: List[ProductoOut] = []
+    termino_alternativas = _principio_activo_base(producto_out.principio_activo) or producto_out.categoria
+    if not producto_out.en_stock and termino_alternativas:
+        resultado_alt = await scraper_service.buscar_catalogo_real(termino_alternativas, tasas)
+        alternativas_out = _sin_duplicados_y_ordenados([
+            _candidato_a_producto_out(c)
+            for c in resultado_alt["candidatos"]
+            if c["sku"] != producto_out.sku and c["disponibilidad"]["en_stock"]
+        ])
+
+    return BuscarResponse(
+        encontrado=True,
+        origen=origen,
+        producto=producto_out,
+        principio_activo_detectado=principio_activo_detectado,
+        alternativas=alternativas_out,
+        fuente=fuente,
+        mensaje=None,
+    )
 
 
 @app.get(
@@ -347,7 +400,7 @@ async def buscar(
         #    tipo de producto, no solo medicamentos-) y reintentar en
         #    Farmatodo con el término que haya sugerido.
         origen = "ia_gemini"
-        info_ia = ai_resolver.extraer_termino_busqueda(consulta)
+        info_ia = await asyncio.to_thread(ai_resolver.extraer_termino_busqueda, consulta)
         principio_activo_detectado = info_ia.get("termino_sugerido")
 
         if info_ia.get("error"):
@@ -373,7 +426,11 @@ async def buscar(
         # 3. Varias coincidencias: todas como opciones (sin duplicados,
         #    agrupadas por principio activo/dosis), sin límite ni
         #    adivinar una. Si comparten principio activo, se agrega un
-        #    resumen único de IA de "para qué sirve".
+        #    resumen único de IA de "para qué sirve". El usuario elige
+        #    una tocándola -la app la resuelve por SKU exacto en
+        #    `/producto/{sku}`, NUNCA volviendo a buscar por nombre, para
+        #    no arriesgarse a que la relevancia de texto traiga otro
+        #    producto distinto-.
         return BuscarResponse(
             encontrado=True,
             origen=origen,
@@ -381,37 +438,41 @@ async def buscar(
             principio_activo_detectado=principio_activo_detectado,
             fuente=resultado["meta"]["fuente"],
             mensaje=f"Se encontraron {len(productos_out)} coincidencias en Farmatodo, elige una.",
-            resumen_ia=_resumen_ia_para_opciones(productos_out),
+            resumen_ia=await _resumen_ia_para_opciones(productos_out),
         )
 
     # Coincidencia única y confirmada.
-    producto_out = productos_out[0]
-    principio_activo_detectado = producto_out.principio_activo or principio_activo_detectado
+    return await _respuesta_para_producto_confirmado(
+        productos_out[0], tasas, origen, principio_activo_detectado, resultado["meta"]["fuente"]
+    )
 
-    # 4. Completar ficha médica (descripción/origen) con IA.
-    producto_out = _completar_ficha_medica(producto_out)
 
-    # 5. Si está agotado, buscar alternativas reales: por el mismo
-    #    principio activo si es un medicamento (sin la dosis específica,
-    #    para no limitar de más), o por la misma categoría si es
-    #    cualquier otro tipo de producto (Farmatodo no vende solo
-    #    medicinas).
-    alternativas_out: List[ProductoOut] = []
-    termino_alternativas = _principio_activo_base(producto_out.principio_activo) or producto_out.categoria
-    if not producto_out.en_stock and termino_alternativas:
-        resultado_alt = await scraper_service.buscar_catalogo_real(termino_alternativas, tasas)
-        alternativas_out = _sin_duplicados_y_ordenados([
-            _candidato_a_producto_out(c)
-            for c in resultado_alt["candidatos"]
-            if c["sku"] != producto_out.sku and c["disponibilidad"]["en_stock"]
-        ])
+@app.get(
+    "/producto/{sku}",
+    response_model=BuscarResponse,
+    tags=["buscar"],
+    dependencies=[Depends(verificar_acceso)],
+)
+async def producto_por_sku(sku: str) -> BuscarResponse:
+    """Resuelve EXACTAMENTE un producto por su SKU -pensado para cuando
+    el usuario ya eligió una opción entre varias de una búsqueda
+    ambigua-. A diferencia de `/buscar`, nunca es ambiguo: o es ese SKU
+    exacto, o no se encontró. Reemplaza el patrón anterior de volver a
+    buscar por NOMBRE al tocar una opción, que podía abrir un producto
+    distinto si la relevancia de texto de Farmatodo traía otra cosa
+    primero."""
+    tasas = _tasas_actuales()
+    candidato = await scraper_service.buscar_por_sku(sku.strip(), tasas)
 
-    return BuscarResponse(
-        encontrado=True,
-        origen=origen,
-        producto=producto_out,
-        principio_activo_detectado=principio_activo_detectado,
-        alternativas=alternativas_out,
-        fuente=resultado["meta"]["fuente"],
-        mensaje=None,
+    if candidato is None:
+        return BuscarResponse(
+            encontrado=False,
+            origen="farmatodo",
+            fuente="no_encontrado",
+            mensaje=f"No se encontró el producto con SKU {sku} en el catálogo de Farmatodo.",
+        )
+
+    producto_out = _candidato_a_producto_out(candidato)
+    return await _respuesta_para_producto_confirmado(
+        producto_out, tasas, "farmatodo", producto_out.principio_activo, "scraping_real"
     )

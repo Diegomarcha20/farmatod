@@ -54,7 +54,21 @@ class ApiService {
     final uri = Uri.parse('$baseUrl/buscar').replace(
       queryParameters: {'q': consulta},
     );
+    return _pedirBuscarResponse(uri, headerAcceso);
+  }
 
+  /// Resuelve EXACTAMENTE un producto por su SKU (`/producto/{sku}`).
+  /// Se usa al tocar una opción entre varias coincidencias -en vez de
+  /// volver a buscar por NOMBRE, que podía abrir un producto distinto
+  /// si la relevancia de texto de Farmatodo traía otra cosa primero-.
+  Future<BuscarResponse> buscarPorSku(String sku) async {
+    final baseUrl = await _config.resolverBaseUrl();
+    final headerAcceso = await _config.headerCodigoAcceso();
+    final uri = Uri.parse('$baseUrl/producto/${Uri.encodeComponent(sku)}');
+    return _pedirBuscarResponse(uri, headerAcceso);
+  }
+
+  Future<BuscarResponse> _pedirBuscarResponse(Uri uri, Map<String, String> headerAcceso) async {
     final response = await _solicitarConReintento(uri, headerAcceso);
 
     if (response.statusCode == 200) {

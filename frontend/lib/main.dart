@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import 'providers/rates_provider.dart';
 import 'providers/search_provider.dart';
 import 'screens/home_screen.dart';
 import 'services/api_service.dart';
@@ -28,8 +29,11 @@ class FarmaTodApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (_) => SearchProvider(ApiService()),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (_) => SearchProvider(ApiService())),
+        ChangeNotifierProvider(create: (_) => RatesProvider()),
+      ],
       child: MaterialApp(
         title: 'FarmaTod',
         debugShowCheckedModeBanner: false,

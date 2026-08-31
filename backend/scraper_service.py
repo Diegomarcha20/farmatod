@@ -164,12 +164,19 @@ class FarmatodoScraper:
         return self._client
 
     async def _solicitar_con_reintentos(
-        self, metodo: str, url: str, **kwargs: Any
+        self, metodo: str, url: str, max_reintentos: Optional[int] = None, **kwargs: Any
     ) -> httpx.Response:
+        """`max_reintentos` permite bajar el número de intentos para
+        llamadas secundarias no críticas (ej. la ficha SSR: es un
+        enriquecimiento "mejor esfuerzo", no tiene sentido que retenga
+        la respuesta con la misma insistencia que la búsqueda principal
+        en Algolia). Si no se pasa, usa el valor configurado en el
+        cliente."""
         cliente = self._cliente()
         ultimo_error: Optional[BaseException] = None
+        intentos_totales = max_reintentos if max_reintentos is not None else self._max_reintentos
 
-        for intento in range(1, self._max_reintentos + 1):
+        for intento in range(1, intentos_totales + 1):
             kwargs.setdefault("headers", {})
             kwargs["headers"].setdefault("User-Agent", _user_agent_aleatorio())
             try:
@@ -178,7 +185,7 @@ class FarmatodoScraper:
                 ultimo_error = exc
                 logger.warning(
                     "Intento %d/%d: fallo de red hacia %s: %s",
-                    intento, self._max_reintentos, url, exc,
+                    intento, intentos_totales, url, exc,
                 )
             else:
                 if respuesta.status_code < 400:
@@ -194,15 +201,15 @@ class FarmatodoScraper:
                 )
                 logger.warning(
                     "Intento %d/%d: %s respondió %d (reintentable).",
-                    intento, self._max_reintentos, url, respuesta.status_code,
+                    intento, intentos_totales, url, respuesta.status_code,
                 )
 
                 espera = self._calcular_espera(intento, respuesta)
-                if intento < self._max_reintentos:
+                if intento < intentos_totales:
                     await asyncio.sleep(espera)
                 continue
 
-            if intento < self._max_reintentos:
+            if intento < intentos_totales:
                 await asyncio.sleep(self._calcular_espera(intento, None))
 
         raise ScraperError(f"Agotados los reintentos hacia {url}: {ultimo_error}") from ultimo_error
@@ -231,12 +238,18 @@ class FarmatodoScraper:
             "Accept-Language": "es-VE,es;q=0.9",
         }
 
-    def _cuerpo_algolia(self, termino: str, hits_por_pagina: int = 50) -> dict[str, Any]:
+    def _cuerpo_algolia(self, termino: str, hits_por_pagina: int = 300) -> dict[str, Any]:
         params = urlencode(
             {
-                # Deliberadamente alto: la meta es "todas las coincidencias
-                # razonables", no una sola sugerencia. Un término de
-                # farmacia específico rara vez supera esto en la práctica.
+                # 300 en vez de un valor "razonable" más bajo: se
+                # confirmó en vivo que este índice de Algolia limita a
+                # 240 resultados totales por búsqueda (`nbHits`) sin
+                # importar el término -con hitsPerPage=50 (valor previo)
+                # una búsqueda amplia como "vitamina" (240 coincidencias
+                # reales) solo devolvía las primeras 50, dejando 190
+                # productos reales -algunos con stock en la tienda- fuera
+                # de los resultados sin ningún aviso. 300 cubre el tope
+                # real del índice con margen.
                 "hitsPerPage": hits_por_pagina,
                 "page": 0,
                 "filters": "outofstore:false ",
@@ -278,11 +291,20 @@ class FarmatodoScraper:
         JSON-LD (schema.org/Product) de la página de producto
         renderizada en servidor, para obtener un nombre comercial
         limpio. Si falla por cualquier motivo, se ignora sin afectar
-        el resultado principal."""
+        el resultado principal.
+
+        A propósito con SOLO 1 intento y un timeout corto (a diferencia
+        de la búsqueda principal en Algolia, que sí reintenta con
+        backoff): es un enriquecimiento "mejor esfuerzo" -si la página
+        de producto de Farmatodo está lenta, no tiene sentido hacer
+        esperar al usuario varios segundos extra por un dato secundario
+        que de todas formas se puede omitir sin romper la respuesta."""
         try:
             respuesta = await self._solicitar_con_reintentos(
                 "GET",
                 f"{SITIO_BASE_URL}/producto/{url_slug}",
+                max_reintentos=1,
+                timeout=5.0,
                 headers={"Accept": "text/html"},
             )
             soup = BeautifulSoup(respuesta.text, "html.parser")
@@ -614,6 +636,62 @@ async def buscar_catalogo_real(
     resiliencia-."""
     async with FarmatodoScraper(tienda=tienda) as scraper:
         return await scraper.buscar_catalogo(termino, tasas)
+
+
+async def buscar_por_sku(
+    sku: str,
+    tasas: TasasConfiguracion,
+    tienda: TiendaObjetivo = TiendaObjetivo(),
+) -> Optional[dict[str, Any]]:
+    """Punto de entrada para resolver EXACTAMENTE un producto por su
+    SKU -usado cuando el usuario ya eligió uno entre varias opciones
+    de una búsqueda ambigua-, a diferencia de `buscar_catalogo` (que
+    puede devolver varios candidatos por relevancia de texto). Como
+    Algolia no expone un filtro de campo confiable para buscar por SKU
+    exacto en este índice, se hace la misma búsqueda de texto pero
+    -en vez de confiar en cuál queda primero por relevancia- se
+    selecciona el hit cuyo SKU coincide exactamente. Esto evita el bug
+    de "toco una opción y me abre un medicamento distinto": antes se
+    volvía a buscar por NOMBRE, y la relevancia de Algolia podía traer
+    otra cosa primero.
+
+    Devuelve None si no se encuentra ese SKU exacto. Se cachea igual
+    que el resto de las búsquedas (mismo TTL, mismo caché de módulo)."""
+    sku_limpio = sku.strip()
+    if not sku_limpio:
+        return None
+
+    clave_cache = f"sku::{sku_limpio}"
+    cacheado = _cache_busquedas.obtener(clave_cache)
+    if cacheado is not None:
+        return cacheado
+
+    async with FarmatodoScraper(tienda=tienda) as scraper:
+        try:
+            hits = await scraper._buscar_todos_en_algolia(sku_limpio)  # noqa: SLF001 - reutilizado a propósito
+        except Exception as exc:  # noqa: BLE001 - cualquier fallo de red/API, nunca rompe el endpoint
+            logger.warning("Fallo buscando por SKU %r: %s", sku_limpio, exc)
+            return None
+
+        hit_exacto = next(
+            (
+                h
+                for h in hits
+                if str(h.get("item") or h.get("objectID") or h.get("sku_searchable") or "") == sku_limpio
+            ),
+            None,
+        )
+        if hit_exacto is None:
+            return None
+
+        try:
+            candidato = await scraper._construir_candidato(hit_exacto, tasas, con_ficha_ssr=True)  # noqa: SLF001
+        except Exception as exc:  # noqa: BLE001 - error de parseo/estructura inesperada
+            logger.warning("Fallo interpretando el producto de SKU %r: %s", sku_limpio, exc)
+            return None
+
+    _cache_busquedas.guardar(clave_cache, candidato)
+    return candidato
 
 
 # --------------------------------------------------------------------------

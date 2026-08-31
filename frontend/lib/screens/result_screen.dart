@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../main.dart';
 import '../models/producto.dart';
+import '../providers/rates_provider.dart';
 import '../providers/search_provider.dart';
 import '../services/local_cache_service.dart';
 import '../widgets/legal_footer.dart';
@@ -283,7 +284,7 @@ class _OpcionesView extends StatelessWidget {
             padding: const EdgeInsets.only(bottom: 12),
             child: ProductCard(
               producto: opcion,
-              onTap: () => context.read<SearchProvider>().buscar(opcion.nombre),
+              onTap: () => context.read<SearchProvider>().abrirOpcion(opcion),
             ),
           ),
         ),
@@ -669,18 +670,26 @@ class _FichaMedicaCard extends StatelessWidget {
                 color: AppColors.primary,
               ),
             ),
-            if (producto.precios.isNotEmpty) ...[
-              const SizedBox(height: 2),
-              Text(
-                producto.precios.entries
-                    .map((e) => '≈ ${e.value.totalConIgtf.toStringAsFixed(2)} ${e.key} (con IGTF)')
-                    .join('  ·  '),
-                style: GoogleFonts.inter(
-                  fontSize: 12,
-                  color: AppColors.primary.withValues(alpha: 0.55),
-                ),
-              ),
-            ],
+            Builder(
+              builder: (context) {
+                // Calculado en el teléfono con las tasas manuales de
+                // Ajustes (no con las que devuelve el backend).
+                final precios = context.watch<RatesProvider>().calcularPrecios(producto.precioBs);
+                if (precios.isEmpty) return const SizedBox.shrink();
+                return Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    precios.entries
+                        .map((e) => '≈ ${e.value.totalConIgtf.toStringAsFixed(2)} ${e.key} (con IGTF)')
+                        .join('  ·  '),
+                    style: GoogleFonts.inter(
+                      fontSize: 12,
+                      color: AppColors.primary.withValues(alpha: 0.55),
+                    ),
+                  ),
+                );
+              },
+            ),
           ],
         ),
       ),

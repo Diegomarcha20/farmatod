@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 
 import '../main.dart';
 import '../models/producto.dart';
+import '../providers/rates_provider.dart';
 
 /// Badge de disponibilidad: verde (#10B981) si hay stock, rojo
 /// (#EF4444) si está agotado. Farmatodo no da una cantidad exacta, así
@@ -76,12 +78,16 @@ class ProductCard extends StatelessWidget {
       if (producto.laboratorio != null) producto.laboratorio!,
     ].join(' · ');
 
-    // Muestra una sola divisa de referencia en la tarjeta compacta
-    // (USD si está configurada, si no la primera que haya) -la ficha
-    // completa del resultado sí muestra todas-.
-    final codigosDivisa = producto.precios.keys.toList();
+    // El precio en divisas se calcula en el teléfono con las tasas que
+    // el usuario configuró manualmente en Ajustes (no con las que
+    // devuelve el backend) -así cada dispositivo puede tener su propia
+    // tasa del día-. Se muestra una sola divisa de referencia en la
+    // tarjeta compacta (USD si está configurada, si no la primera que
+    // haya); la ficha completa del resultado sí muestra todas.
+    final precios = context.watch<RatesProvider>().calcularPrecios(producto.precioBs);
+    final codigosDivisa = precios.keys.toList();
     final codigoReferencia = codigosDivisa.contains('USD') ? 'USD' : (codigosDivisa.isNotEmpty ? codigosDivisa.first : null);
-    final divisaReferencia = codigoReferencia != null ? producto.precios[codigoReferencia] : null;
+    final divisaReferencia = codigoReferencia != null ? precios[codigoReferencia] : null;
 
     return Card(
       clipBehavior: Clip.antiAlias,

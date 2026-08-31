@@ -30,12 +30,40 @@ class SearchProvider extends ChangeNotifier {
   String? errorMessage;
   BuscarResponse? resultado;
   ProductoCacheado? productoOffline;
+
+  /// Texto mostrado en la barra de título de [ResultScreen]. Al elegir
+  /// una opción por SKU exacto ([abrirOpcion]), es el nombre del
+  /// producto (no el SKU) para que el título siga siendo legible.
   String consultaActual = '';
 
-  Future<void> buscar(String consulta) async {
-    consultaActual = consulta.trim();
-    if (consultaActual.isEmpty) return;
+  /// Término usado para el respaldo offline en el caché local
+  /// ([LocalCacheService.buscar]): el texto de búsqueda para [buscar],
+  /// o el SKU exacto para [abrirOpcion] (más preciso que buscar por
+  /// nombre en el caché local también).
+  String _claveCacheLocal = '';
 
+  Future<BuscarResponse> Function()? _ultimaLlamada;
+
+  Future<void> buscar(String consulta) async {
+    final limpio = consulta.trim();
+    if (limpio.isEmpty) return;
+    consultaActual = limpio;
+    _claveCacheLocal = limpio;
+    await _ejecutar(() => _apiService.buscar(limpio));
+  }
+
+  /// Abre EXACTAMENTE la opción que el usuario tocó en una lista de
+  /// varias coincidencias, resolviéndola por su SKU exacto (no
+  /// volviendo a buscar por nombre, que podía traer un producto
+  /// distinto por relevancia de texto).
+  Future<void> abrirOpcion(Producto opcion) async {
+    consultaActual = opcion.nombre;
+    _claveCacheLocal = opcion.sku;
+    await _ejecutar(() => _apiService.buscarPorSku(opcion.sku));
+  }
+
+  Future<void> _ejecutar(Future<BuscarResponse> Function() llamada) async {
+    _ultimaLlamada = llamada;
     status = SearchStatus.loading;
     errorMessage = null;
     productoOffline = null;
@@ -53,7 +81,7 @@ class SearchProvider extends ChangeNotifier {
     }
 
     try {
-      final respuesta = await _apiService.buscar(consultaActual);
+      final respuesta = await llamada();
       resultado = respuesta;
       status = SearchStatus.success;
       await _guardarEnCacheLocal(respuesta);
@@ -84,7 +112,7 @@ class SearchProvider extends ChangeNotifier {
   }
 
   Future<void> _resolverSinConexion(String motivoRed) async {
-    final cacheado = await _cacheLocal.buscar(consultaActual);
+    final cacheado = await _cacheLocal.buscar(_claveCacheLocal);
     if (cacheado != null) {
       productoOffline = cacheado;
       status = SearchStatus.offline;
@@ -108,8 +136,9 @@ class SearchProvider extends ChangeNotifier {
   }
 
   void reintentar() {
-    if (consultaActual.isNotEmpty) {
-      buscar(consultaActual);
+    final llamada = _ultimaLlamada;
+    if (llamada != null) {
+      _ejecutar(llamada);
     }
   }
 }
