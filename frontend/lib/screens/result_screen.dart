@@ -627,6 +627,7 @@ class _FichaMedicaCard extends StatelessWidget {
                 if (producto.laboratorio != null)
                   _Etiqueta(texto: producto.laboratorio!, icono: Icons.factory_outlined),
                 StockBadge(enStock: producto.enStock, cantidadAproximada: producto.cantidadAproximada),
+                if (producto.requiereReceta != null) RecetaBadge(requiereReceta: producto.requiereReceta!),
               ],
             ),
             if (producto.descripcion != null) ...[

@@ -28,7 +28,16 @@ load_dotenv()
 logger = logging.getLogger("ai_resolver")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash")
+# "gemini-3.6-flash" (usado antes) tiene un tope de solo 20 peticiones
+# POR DÍA en el nivel gratuito -confirmado en vivo, se agota casi de
+# inmediato con uso real de la app (cada producto que se abre pide una
+# descripción a la IA)-. Las variantes "flash-lite" están pensadas
+# para volumen alto en el nivel gratuito; probado en vivo, 10/10
+# peticiones seguidas sin toparse con ningún límite. "-latest" (en vez
+# de fijar una versión) para no volver a toparnos con un modelo
+# descontinuado ("ya no disponible para cuentas nuevas") cuando Google
+# libere la siguiente versión.
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-lite-latest")
 
 _client: genai.Client | None = None
 if GEMINI_API_KEY:

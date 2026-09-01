@@ -74,6 +74,11 @@ class Producto {
   final String? descripcion;
   final String? laboratorio;
   final String? paisOrigen;
+
+  /// Clasificación regulatoria propia de Farmatodo (no una inferencia
+  /// de IA): null cuando el dato no vino en la respuesta -nunca se
+  /// asume "no requiere" por defecto-.
+  final bool? requiereReceta;
   final double precioBs;
 
   /// Una entrada por cada moneda configurada en el backend (ej. "USD",
@@ -93,6 +98,7 @@ class Producto {
     this.descripcion,
     this.laboratorio,
     this.paisOrigen,
+    this.requiereReceta,
     required this.precioBs,
     required this.precios,
     required this.enStock,
@@ -118,6 +124,7 @@ class Producto {
       descripcion: json['descripcion'] as String?,
       laboratorio: json['laboratorio'] as String?,
       paisOrigen: json['pais_origen'] as String?,
+      requiereReceta: json['requiere_receta'] as bool?,
       precioBs: (json['precio_bs'] as num).toDouble(),
       precios: _precioDivisasFromJson(json['precios']),
       enStock: json['en_stock'] as bool,
@@ -141,6 +148,7 @@ class Producto {
       'descripcion': descripcion,
       'laboratorio': laboratorio,
       'pais_origen': paisOrigen,
+      'requiere_receta': requiereReceta == null ? null : (requiereReceta! ? 1 : 0),
       'precio_bs': precioBs,
       'precios_json': jsonEncode(precios.map((codigo, p) => MapEntry(codigo, p.toJson()))),
       'en_stock': enStock ? 1 : 0,
@@ -161,6 +169,7 @@ class Producto {
       descripcion: mapa['descripcion'] as String?,
       laboratorio: mapa['laboratorio'] as String?,
       paisOrigen: mapa['pais_origen'] as String?,
+      requiereReceta: (mapa['requiere_receta'] as int?) == null ? null : (mapa['requiere_receta'] as int) == 1,
       precioBs: (mapa['precio_bs'] as num).toDouble(),
       precios: precioJson != null && precioJson.isNotEmpty
           ? _precioDivisasFromJson(jsonDecode(precioJson) as Map<String, dynamic>)

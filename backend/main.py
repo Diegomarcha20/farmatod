@@ -135,6 +135,11 @@ class ProductoOut(BaseModel):
     descripcion: Optional[str] = None
     laboratorio: Optional[str] = None
     pais_origen: Optional[str] = None
+    # Clasificación regulatoria propia de Farmatodo (campo
+    # `requirePrescription` de su catálogo, corroborado por
+    # `rms_group`), no una inferencia de IA. None cuando el dato no
+    # vino en la respuesta -nunca se asume "no requiere" por defecto-.
+    requiere_receta: Optional[bool] = None
     precio_bs: float
     # Una entrada por cada moneda configurada en TASAS_CAMBIO (ej.
     # {"USD": {...}, "COP": {...}}) -no hay un límite fijo de monedas-.
@@ -278,6 +283,7 @@ def _candidato_a_producto_out(candidato: dict) -> ProductoOut:
         principio_activo=_normalizar_texto(candidato.get("principio_activo")),
         categoria=_normalizar_texto(candidato.get("categoria")),
         laboratorio=candidato.get("laboratorio"),
+        requiere_receta=candidato.get("requiere_receta"),
         precio_bs=precios["bs"],
         precios={codigo: PrecioDivisaOut(**valores) for codigo, valores in precios["divisas"].items()},
         en_stock=disponibilidad["en_stock"],

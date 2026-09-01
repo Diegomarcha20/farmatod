@@ -61,6 +61,44 @@ class StockBadge extends StatelessWidget {
   }
 }
 
+/// Badge de "requiere receta médica" (ámbar) o "venta libre" (verde):
+/// clasificación regulatoria propia de Farmatodo (`requirePrescription`
+/// en su catálogo), no una inferencia de IA. Solo se muestra cuando el
+/// dato vino en la respuesta -si no se sabe, no se muestra nada, para
+/// no dar una falsa sensación de "confirmado sin receta"-.
+class RecetaBadge extends StatelessWidget {
+  const RecetaBadge({super.key, required this.requiereReceta});
+
+  final bool requiereReceta;
+
+  @override
+  Widget build(BuildContext context) {
+    const colorReceta = Color(0xFFB45309); // ámbar, mismo tono de aviso usado en el resto de la app
+    final color = requiereReceta ? colorReceta : AppColors.stockDisponible;
+    final texto = requiereReceta ? 'Requiere receta' : 'Venta libre';
+    final icono = requiereReceta ? Icons.assignment_late_outlined : Icons.check_circle_outline;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icono, size: 13, color: color),
+          const SizedBox(width: 5),
+          Text(
+            texto,
+            style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600, color: color),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Tarjeta reutilizable para mostrar un producto (resultado principal,
 /// opción entre varias coincidencias, o alternativa terapéutica):
 /// bordes de 16px, elevación 2 y badge de stock verde/rojo, según la
@@ -170,7 +208,16 @@ class ProductCard extends StatelessWidget {
                             color: AppColors.primary,
                           ),
                         ),
-                        StockBadge(enStock: producto.enStock, compacto: true),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (producto.requiereReceta == true) ...[
+                              const RecetaBadge(requiereReceta: true),
+                              const SizedBox(width: 6),
+                            ],
+                            StockBadge(enStock: producto.enStock, compacto: true),
+                          ],
+                        ),
                       ],
                     ),
                     if (resumenDivisas.isNotEmpty) ...[

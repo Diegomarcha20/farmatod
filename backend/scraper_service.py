@@ -370,6 +370,27 @@ class FarmatodoScraper:
             return self._nombre_desde_slug(url_slug)
         return sku
 
+    def _requiere_receta_desde_hit(self, hit: dict[str, Any]) -> Optional[bool]:
+        """`requirePrescription` es el propio campo regulatorio de
+        Farmatodo (viene como texto "true"/"false", no booleano nativo
+        -de ahí el parseo manual-), corroborado por `rms_group` ("RX"
+        para los que la requieren): confirmado en vivo, presente en el
+        100% de una muestra de cientos de hits reales. No hace falta
+        IA ni una base de datos externa para saber si un medicamento
+        requiere receta -Farmatodo, como farmacia con licencia, ya
+        clasifica esto en su propio catálogo-. Si el campo faltara o
+        viniera en un formato inesperado, se devuelve None (desconocido)
+        en vez de asumir un valor -mostrar "no requiere receta" por
+        error sería el peor tipo de equivocación posible aquí-."""
+        valor = hit.get("requirePrescription")
+        if isinstance(valor, bool):
+            return valor
+        if isinstance(valor, str):
+            normalizado = valor.strip().lower()
+            if normalizado in ("true", "false"):
+                return normalizado == "true"
+        return None
+
     def _laboratorio_desde_hit(self, hit: dict[str, Any]) -> Optional[str]:
         """El campo `brand` de Algolia a veces es un nombre de marca
         limpio ("Calox") y a veces un código interno de proveedor
@@ -439,6 +460,7 @@ class FarmatodoScraper:
             "principio_activo": principio_activo,
             "categoria": categoria,
             "laboratorio": laboratorio,
+            "requiere_receta": self._requiere_receta_desde_hit(hit),
             "disponibilidad": {
                 "tienda": self._tienda.nombre_visible,
                 "en_stock": en_stock,
