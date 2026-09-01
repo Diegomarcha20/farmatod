@@ -1,0 +1,43 @@
+name: Compilar APK de la app
+
+# Compila el APK de release en un runner de GitHub (Linux), evitando
+# por completo el problema de entorno de Windows que impide compilar
+# localmente en algunas sesiones ("Unable to establish loopback
+# connection" de Gradle). Se dispara a mano desde la pestaña "Actions"
+# -no en cada commit, para no compilar de más- y deja el APK listo
+# para descargar como archivo adjunto del run.
+#
+# El release se firma con la clave de debug (mismo comportamiento que
+# `flutter build apk --release` sin firma propia configurada): sirve
+# para instalar en tu propio teléfono, no para publicarlo en Play
+# Store -para eso hace falta configurar una clave de firma propia-.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar el código
+        uses: actions/checkout@v4
+
+      - name: Configurar Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Instalar dependencias
+        working-directory: frontend
+        run: flutter pub get
+
+      - name: Compilar APK (release)
+        working-directory: frontend
+        run: flutter build apk --release
+
+      - name: Subir el APK como archivo descargable
+        uses: actions/upload-artifact@v4
+        with:
+          name: farmatod-apk
+          path: frontend/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
