@@ -9,11 +9,19 @@ import '../widgets/product_card.dart';
 import 'scanner_screen.dart';
 
 /// Lo que falta en el anaquel, resuelto contra el depósito propio: se
-/// escanea (o busca) cada producto que falta y la pantalla dice de una
-/// si hay existencias registradas en depósito para ir a reponerlo -o
-/// si hace falta registrar cuánto hay-. "Depósito" es la trastienda de
-/// la propia tienda, un dato que el usuario mantiene aquí -Farmatodo no
-/// expone stock de trastienda/depósito en su catálogo público-.
+/// recorre el planograma escaneando (o buscando) cada producto que
+/// falta, y la pantalla dice de una si hay existencias registradas en
+/// depósito para ir a reponerlo -o si hace falta registrar cuánto hay-.
+///
+/// La lista de faltantes QUEDA GUARDADA -sobrevive a salir de la
+/// pantalla, cerrar la app, etc.-: cada producto se queda ahí hasta
+/// que el usuario lo marca como "ya lo surtí" después de reponerlo en
+/// el anaquel. No es una lista de la sesión actual, es la lista de
+/// pendientes por surtir.
+///
+/// "Depósito" es la trastienda de la propia tienda, un dato que el
+/// usuario mantiene aquí -Farmatodo no expone stock de trastienda/
+/// depósito en su catálogo público-.
 class DepositoScreen extends StatefulWidget {
   const DepositoScreen({super.key});
 
@@ -26,13 +34,29 @@ class _DepositoScreenState extends State<DepositoScreen> {
   final _db = InventoryDbService.instancia;
   final _busquedaController = TextEditingController();
 
-  final List<_ResultadoFaltante> _faltantes = [];
+  List<FaltantePendiente> _faltantes = [];
+  bool _cargando = true;
   bool _buscando = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _cargar();
+  }
 
   @override
   void dispose() {
     _busquedaController.dispose();
     super.dispose();
+  }
+
+  Future<void> _cargar() async {
+    final faltantes = await _db.listarFaltantesConDeposito();
+    if (!mounted) return;
+    setState(() {
+      _faltantes = faltantes;
+      _cargando = false;
+    });
   }
 
   Future<void> _escanear() async {
@@ -65,20 +89,8 @@ class _DepositoScreenState extends State<DepositoScreen> {
         return;
       }
 
-      final registrado = await _db.obtenerProducto(encontrado.sku);
-      if (!mounted) return;
-      setState(() {
-        _faltantes.removeWhere((f) => f.sku == encontrado.sku);
-        _faltantes.insert(
-          0,
-          _ResultadoFaltante(
-            sku: encontrado.sku,
-            nombre: encontrado.nombre,
-            imagenUrl: encontrado.imagenUrl,
-            cantidadDeposito: registrado?.cantidadDeposito,
-          ),
-        );
-      });
+      await _db.agregarFaltante(encontrado.sku, encontrado.nombre, encontrado.imagenUrl);
+      await _cargar();
     } catch (_) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -90,7 +102,7 @@ class _DepositoScreenState extends State<DepositoScreen> {
     }
   }
 
-  Future<void> _registrarStock(_ResultadoFaltante item) async {
+  Future<void> _registrarStock(FaltantePendiente item) async {
     final cantidad = await showDialog<int>(
       context: context,
       builder: (context) => _DialogoCantidad(valorInicial: item.cantidadDeposito ?? 0),
@@ -105,111 +117,125 @@ class _DepositoScreenState extends State<DepositoScreen> {
         imagenUrl: item.imagenUrl,
       ),
     );
+    await _cargar();
+  }
 
+  Future<void> _marcarSurtido(FaltantePendiente item) async {
+    await _db.quitarFaltante(item.sku);
+    await _cargar();
     if (!mounted) return;
-    setState(() {
-      final i = _faltantes.indexWhere((f) => f.sku == item.sku);
-      if (i != -1) _faltantes[i] = item.copyWith(cantidadDeposito: cantidad);
-    });
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${item.nombre}: marcado como surtido.')),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Faltantes y depósito')),
-      body: SafeArea(
-        child: Column(
-          children: [
+      appBar: AppBar(
+        title: const Text('Faltantes y depósito'),
+        actions: [
+          if (_faltantes.isNotEmpty)
             Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.only(right: 12),
+              child: Center(
+                child: Text(
+                  '${_faltantes.length} pendientes',
+                  style: GoogleFonts.inter(fontSize: 12.5, fontWeight: FontWeight.w600, color: Colors.white),
+                ),
+              ),
+            ),
+        ],
+      ),
+      body: _cargando
+          ? const Center(child: CircularProgressIndicator(color: AppColors.acento))
+          : SafeArea(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Escanea o busca lo que falta en el anaquel',
-                    style: GoogleFonts.inter(fontSize: 14.5, fontWeight: FontWeight.w700, color: AppColors.primary),
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'Te decimos al instante si según tu depósito tienes existencias para reponer.',
-                    style: GoogleFonts.inter(fontSize: 12.5, color: AppColors.primary.withValues(alpha: 0.6)),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _busquedaController,
-                          textInputAction: TextInputAction.search,
-                          onSubmitted: (_) => _buscarPorTexto(),
-                          style: GoogleFonts.inter(fontSize: 14),
-                          decoration: const InputDecoration(hintText: 'Nombre o código...'),
+                  Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Recorre el planograma y escanea lo que falta',
+                          style: GoogleFonts.inter(fontSize: 14.5, fontWeight: FontWeight.w700, color: AppColors.primary),
                         ),
-                      ),
-                      const SizedBox(width: 8),
-                      IconButton.filled(
-                        onPressed: _escanear,
-                        icon: const Icon(Icons.qr_code_scanner_rounded),
-                        tooltip: 'Escanear',
-                      ),
-                      IconButton(
-                        onPressed: _buscando ? null : _buscarPorTexto,
-                        icon: _buscando
-                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-                            : const Icon(Icons.search),
-                      ),
-                    ],
+                        const SizedBox(height: 4),
+                        Text(
+                          'Se va guardando en tu lista de pendientes -queda ahí hasta que marques '
+                          '"ya lo surtí" después de reponerlo en el anaquel-.',
+                          style: GoogleFonts.inter(fontSize: 12.5, height: 1.35, color: AppColors.primary.withValues(alpha: 0.6)),
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: _busquedaController,
+                                textInputAction: TextInputAction.search,
+                                onSubmitted: (_) => _buscarPorTexto(),
+                                style: GoogleFonts.inter(fontSize: 14),
+                                decoration: const InputDecoration(hintText: 'Nombre o código...'),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            IconButton.filled(
+                              onPressed: _buscando ? null : _escanear,
+                              icon: const Icon(Icons.qr_code_scanner_rounded),
+                              tooltip: 'Escanear',
+                            ),
+                            IconButton(
+                              onPressed: _buscando ? null : _buscarPorTexto,
+                              icon: _buscando
+                                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                                  : const Icon(Icons.search),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: _faltantes.isEmpty
+                        ? Center(
+                            child: Padding(
+                              padding: const EdgeInsets.all(32),
+                              child: Text(
+                                'Sin pendientes por surtir. Los productos que escanees aparecen aquí, '
+                                'con su estado en el depósito, y se quedan hasta que los marques como surtidos.',
+                                textAlign: TextAlign.center,
+                                style: GoogleFonts.inter(fontSize: 13, color: AppColors.primary.withValues(alpha: 0.5)),
+                              ),
+                            ),
+                          )
+                        : RefreshIndicator(
+                            onRefresh: _cargar,
+                            child: ListView.separated(
+                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                              itemCount: _faltantes.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 10),
+                              itemBuilder: (context, i) => _TarjetaFaltante(
+                                item: _faltantes[i],
+                                onRegistrar: () => _registrarStock(_faltantes[i]),
+                                onSurtido: () => _marcarSurtido(_faltantes[i]),
+                              ),
+                            ),
+                          ),
                   ),
                 ],
               ),
             ),
-            Expanded(
-              child: _faltantes.isEmpty
-                  ? Center(
-                      child: Padding(
-                        padding: const EdgeInsets.all(32),
-                        child: Text(
-                          'Los productos que vayas escaneando aparecen aquí, con su estado en el depósito.',
-                          textAlign: TextAlign.center,
-                          style: GoogleFonts.inter(fontSize: 13, color: AppColors.primary.withValues(alpha: 0.5)),
-                        ),
-                      ),
-                    )
-                  : ListView.separated(
-                      padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-                      itemCount: _faltantes.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 10),
-                      itemBuilder: (context, i) => _TarjetaFaltante(
-                        item: _faltantes[i],
-                        onRegistrar: () => _registrarStock(_faltantes[i]),
-                      ),
-                    ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
 
-class _ResultadoFaltante {
-  const _ResultadoFaltante({required this.sku, required this.nombre, this.imagenUrl, this.cantidadDeposito});
-
-  final String sku;
-  final String nombre;
-  final String? imagenUrl;
-  final int? cantidadDeposito;
-
-  _ResultadoFaltante copyWith({int? cantidadDeposito}) {
-    return _ResultadoFaltante(sku: sku, nombre: nombre, imagenUrl: imagenUrl, cantidadDeposito: cantidadDeposito);
-  }
-}
-
 class _TarjetaFaltante extends StatelessWidget {
-  const _TarjetaFaltante({required this.item, required this.onRegistrar});
+  const _TarjetaFaltante({required this.item, required this.onRegistrar, required this.onSurtido});
 
-  final _ResultadoFaltante item;
+  final FaltantePendiente item;
   final VoidCallback onRegistrar;
+  final VoidCallback onSurtido;
 
   @override
   Widget build(BuildContext context) {
@@ -229,30 +255,47 @@ class _TarjetaFaltante extends StatelessWidget {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(14),
-        child: Row(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            ProductoImagen(url: item.imagenUrl, tamano: 52),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    item.nombre,
-                    style: GoogleFonts.inter(fontSize: 13.5, fontWeight: FontWeight.w700, color: AppColors.primary),
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
+            Row(
+              children: [
+                ProductoImagen(url: item.imagenUrl, tamano: 52),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        item.nombre,
+                        style: GoogleFonts.inter(fontSize: 13.5, fontWeight: FontWeight.w700, color: AppColors.primary),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      const SizedBox(height: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                        decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(20)),
+                        child: Text(texto, style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.w600, color: color)),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
-                    decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(20)),
-                    child: Text(texto, style: GoogleFonts.inter(fontSize: 11.5, fontWeight: FontWeight.w600, color: color)),
-                  ),
-                ],
-              ),
+                ),
+              ],
             ),
-            TextButton(onPressed: onRegistrar, child: const Text('Actualizar')),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(onPressed: onRegistrar, child: const Text('Actualizar depósito')),
+                const SizedBox(width: 4),
+                TextButton.icon(
+                  onPressed: onSurtido,
+                  icon: const Icon(Icons.check_circle_outline, size: 18),
+                  label: const Text('Ya lo surtí'),
+                ),
+              ],
+            ),
           ],
         ),
       ),

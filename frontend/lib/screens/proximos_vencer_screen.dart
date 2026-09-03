@@ -9,11 +9,15 @@ import '../services/notification_service.dart';
 import '../widgets/product_card.dart';
 import 'agregar_lote_screen.dart';
 
-/// Lista de lotes registrados, ordenados por urgencia -según la fecha
-/// de alerta calculada de cada uno (vencimiento real menos los días de
-/// anticipación de su categoría)-, no por la fecha de vencimiento
-/// cruda: así un producto con poca anticipación configurada puede
-/// aparecer más urgente que uno que vence antes pero con más margen.
+/// Lista de lotes registrados, agrupada por categoría (tipo de
+/// producto) para que sea fácil de recorrer -dentro de cada categoría,
+/// ordenados por urgencia según la fecha de alerta calculada (fecha de
+/// vencimiento real menos los días de anticipación de esa categoría),
+/// no por la fecha de vencimiento cruda: así un producto con poca
+/// anticipación configurada puede aparecer más urgente que uno que
+/// vence antes pero con más margen-. Las categorías mismas se ordenan
+/// por su producto más urgente, para que la sección que más apura
+/// quede arriba.
 class ProximosAVencerScreen extends StatefulWidget {
   const ProximosAVencerScreen({super.key});
 
@@ -21,9 +25,17 @@ class ProximosAVencerScreen extends StatefulWidget {
   State<ProximosAVencerScreen> createState() => _ProximosAVencerScreenState();
 }
 
+class _GrupoCategoria {
+  _GrupoCategoria(this.nombre) : items = [];
+
+  final String nombre;
+  final List<LoteConDetalle> items;
+}
+
 class _ProximosAVencerScreenState extends State<ProximosAVencerScreen> {
   final _db = InventoryDbService.instancia;
-  List<LoteConDetalle> _lotes = [];
+  List<_GrupoCategoria> _grupos = [];
+  int _totalLotes = 0;
   bool _cargando = true;
 
   @override
@@ -35,10 +47,22 @@ class _ProximosAVencerScreenState extends State<ProximosAVencerScreen> {
   Future<void> _cargar() async {
     setState(() => _cargando = true);
     final lotes = await _db.listarLotesConDetalle();
-    lotes.sort((a, b) => a.fechaAlerta.compareTo(b.fechaAlerta));
+
+    final porCategoria = <String, _GrupoCategoria>{};
+    for (final lote in lotes) {
+      final nombre = lote.categoria?.nombre ?? 'Sin categoría';
+      porCategoria.putIfAbsent(nombre, () => _GrupoCategoria(nombre)).items.add(lote);
+    }
+    for (final grupo in porCategoria.values) {
+      grupo.items.sort((a, b) => a.fechaAlerta.compareTo(b.fechaAlerta));
+    }
+    final grupos = porCategoria.values.toList()
+      ..sort((a, b) => a.items.first.fechaAlerta.compareTo(b.items.first.fechaAlerta));
+
     if (!mounted) return;
     setState(() {
-      _lotes = lotes;
+      _grupos = grupos;
+      _totalLotes = lotes.length;
       _cargando = false;
     });
   }
@@ -70,22 +94,67 @@ class _ProximosAVencerScreenState extends State<ProximosAVencerScreen> {
       body: _cargando
           ? const Center(child: CircularProgressIndicator(color: AppColors.acento))
           : SafeArea(
-              child: _lotes.isEmpty
+              child: _totalLotes == 0
                   ? _EstadoVacio(onAgregar: _agregar)
                   : RefreshIndicator(
                       onRefresh: _cargar,
-                      child: ListView.separated(
+                      child: ListView.builder(
                         padding: const EdgeInsets.all(16),
-                        itemCount: _lotes.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemBuilder: (context, i) => _TarjetaLote(
-                          item: _lotes[i],
-                          diasParaAlerta: _lotes[i].diasParaAlerta(ahora),
-                          onRetirar: () => _retirar(_lotes[i]),
-                        ),
+                        itemCount: _grupos.length,
+                        itemBuilder: (context, i) {
+                          final grupo = _grupos[i];
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              if (i > 0) const SizedBox(height: 18),
+                              _EncabezadoCategoria(nombre: grupo.nombre, cantidad: grupo.items.length),
+                              const SizedBox(height: 10),
+                              ...grupo.items.map(
+                                (item) => Padding(
+                                  padding: const EdgeInsets.only(bottom: 10),
+                                  child: _TarjetaLote(
+                                    item: item,
+                                    diasParaAlerta: item.diasParaAlerta(ahora),
+                                    onRetirar: () => _retirar(item),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          );
+                        },
                       ),
                     ),
             ),
+    );
+  }
+}
+
+class _EncabezadoCategoria extends StatelessWidget {
+  const _EncabezadoCategoria({required this.nombre, required this.cantidad});
+
+  final String nombre;
+  final int cantidad;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(Icons.category_outlined, size: 15, color: AppColors.primary.withValues(alpha: 0.5)),
+        const SizedBox(width: 6),
+        Text(
+          nombre.toUpperCase(),
+          style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 0.4, color: AppColors.primary.withValues(alpha: 0.6)),
+        ),
+        const SizedBox(width: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+          decoration: BoxDecoration(color: AppColors.primary.withValues(alpha: 0.08), borderRadius: BorderRadius.circular(10)),
+          child: Text(
+            '$cantidad',
+            style: GoogleFonts.inter(fontSize: 11, fontWeight: FontWeight.w700, color: AppColors.primary.withValues(alpha: 0.6)),
+          ),
+        ),
+      ],
     );
   }
 }
@@ -130,7 +199,7 @@ class _TarjetaLote extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    '${item.categoria?.nombre ?? 'Sin categoría'} · Vence ${formato.format(item.lote.fechaVencimiento)}'
+                    'Vence ${formato.format(item.lote.fechaVencimiento)}'
                     '${item.lote.cantidad > 1 ? ' · x${item.lote.cantidad}' : ''}',
                     style: GoogleFonts.inter(fontSize: 12, color: AppColors.primary.withValues(alpha: 0.55)),
                   ),

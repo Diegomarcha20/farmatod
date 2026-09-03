@@ -23,7 +23,7 @@ class InventoryDbService {
     final ruta = join(await getDatabasesPath(), 'farmatod_inventario.db');
     final db = await openDatabase(
       ruta,
-      version: 1,
+      version: 2,
       onCreate: (db, version) async {
         await db.execute('''
           CREATE TABLE categorias (
@@ -60,6 +60,29 @@ class InventoryDbService {
             cantidad INTEGER NOT NULL DEFAULT 0
           )
         ''');
+        await db.execute('''
+          CREATE TABLE faltantes_pendientes (
+            sku TEXT PRIMARY KEY,
+            nombre TEXT NOT NULL,
+            imagen_url TEXT,
+            fecha_agregado INTEGER NOT NULL
+          )
+        ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        // Es inventario real del usuario (vencimientos, depósito), no
+        // un caché desechable: la migración agrega tablas nuevas sin
+        // tocar ni borrar las que ya existían.
+        if (oldVersion < 2) {
+          await db.execute('''
+            CREATE TABLE IF NOT EXISTS faltantes_pendientes (
+              sku TEXT PRIMARY KEY,
+              nombre TEXT NOT NULL,
+              imagen_url TEXT,
+              fecha_agregado INTEGER NOT NULL
+            )
+          ''');
+        }
       },
     );
     _db = db;
@@ -157,22 +180,18 @@ class InventoryDbService {
     await db.delete('lotes', where: 'id = ?', whereArgs: [loteId]);
   }
 
-  /// Todos los lotes activos, ya combinados con su producto y
-  /// categoría -para "Próximos a vencer"-.
-  Future<List<LoteConDetalle>> listarLotesConDetalle() async {
-    final db = await _obtenerDb();
-    final filas = await db.rawQuery('''
-      SELECT
-        l.id AS lote_id, l.sku AS lote_sku, l.fecha_vencimiento, l.cantidad AS lote_cantidad,
-        l.fecha_agregado,
-        p.nombre AS producto_nombre, p.imagen_url, p.categoria_id, p.cantidad_deposito,
-        c.id AS cat_id, c.nombre AS cat_nombre, c.dias_anticipacion
-      FROM lotes l
-      JOIN productos p ON p.sku = l.sku
-      LEFT JOIN categorias c ON c.id = p.categoria_id
-      ORDER BY l.fecha_vencimiento ASC
-    ''');
+  static const _selectLotesConDetalle = '''
+    SELECT
+      l.id AS lote_id, l.sku AS lote_sku, l.fecha_vencimiento, l.cantidad AS lote_cantidad,
+      l.fecha_agregado,
+      p.nombre AS producto_nombre, p.imagen_url, p.categoria_id, p.cantidad_deposito,
+      c.id AS cat_id, c.nombre AS cat_nombre, c.dias_anticipacion
+    FROM lotes l
+    JOIN productos p ON p.sku = l.sku
+    LEFT JOIN categorias c ON c.id = p.categoria_id
+  ''';
 
+  List<LoteConDetalle> _filasALotesConDetalle(List<Map<String, Object?>> filas) {
     return filas.map((fila) {
       final lote = LoteVencimiento(
         id: fila['lote_id'] as int,
@@ -197,6 +216,24 @@ class InventoryDbService {
             );
       return LoteConDetalle(lote: lote, producto: producto, categoria: categoria);
     }).toList();
+  }
+
+  /// Todos los lotes activos, ya combinados con su producto y
+  /// categoría -para "Próximos a vencer"-.
+  Future<List<LoteConDetalle>> listarLotesConDetalle() async {
+    final db = await _obtenerDb();
+    final filas = await db.rawQuery('$_selectLotesConDetalle ORDER BY l.fecha_vencimiento ASC');
+    return _filasALotesConDetalle(filas);
+  }
+
+  /// Lotes de productos en una categoría específica -usado para
+  /// reprogramar sus avisos cuando se editan los días de anticipación
+  /// de esa categoría, para que el aviso siga siendo correcto para
+  /// lotes que ya se habían agregado antes del cambio-.
+  Future<List<LoteConDetalle>> listarLotesPorCategoria(int categoriaId) async {
+    final db = await _obtenerDb();
+    final filas = await db.rawQuery('$_selectLotesConDetalle WHERE p.categoria_id = ?', [categoriaId]);
+    return _filasALotesConDetalle(filas);
   }
 
   // --------------------------------------------------------------------
@@ -226,5 +263,44 @@ class InventoryDbService {
   Future<void> vaciarConteo() async {
     final db = await _obtenerDb();
     await db.delete('conteo_items');
+  }
+
+  // --------------------------------------------------------------------
+  // Faltantes pendientes de reponer (persistente hasta que se surten)
+  // --------------------------------------------------------------------
+
+  /// Agrega (o refresca) un producto a la lista de faltantes. Si ya
+  /// estaba, no se duplica -queda una sola fila por SKU-.
+  Future<void> agregarFaltante(String sku, String nombre, String? imagenUrl) async {
+    final db = await _obtenerDb();
+    final existente = await db.query('faltantes_pendientes', where: 'sku = ?', whereArgs: [sku], limit: 1);
+    if (existente.isNotEmpty) return;
+    await db.insert(
+      'faltantes_pendientes',
+      FaltantePendiente(sku: sku, nombre: nombre, imagenUrl: imagenUrl, fechaAgregado: DateTime.now()).toMap(),
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+  }
+
+  /// Se llama cuando el producto ya se surtió -lo saca de la lista de
+  /// pendientes-.
+  Future<void> quitarFaltante(String sku) async {
+    final db = await _obtenerDb();
+    await db.delete('faltantes_pendientes', where: 'sku = ?', whereArgs: [sku]);
+  }
+
+  /// Todos los faltantes pendientes, más recientes primero, cada uno
+  /// con su cantidad de depósito actual (join con `productos`, no un
+  /// valor guardado en el momento en que se agregó el faltante).
+  Future<List<FaltantePendiente>> listarFaltantesConDeposito() async {
+    final db = await _obtenerDb();
+    final filas = await db.rawQuery('''
+      SELECT f.sku AS sku, f.nombre AS nombre, f.imagen_url AS imagen_url, f.fecha_agregado AS fecha_agregado,
+             p.cantidad_deposito AS cantidad_deposito
+      FROM faltantes_pendientes f
+      LEFT JOIN productos p ON p.sku = f.sku
+      ORDER BY f.fecha_agregado DESC
+    ''');
+    return filas.map(FaltantePendiente.fromMap).toList();
   }
 }

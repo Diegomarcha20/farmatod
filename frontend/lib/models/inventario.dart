@@ -202,3 +202,48 @@ class ConteoItem {
     return ConteoItem(sku: sku, nombre: nombre, imagenUrl: imagenUrl, cantidad: cantidad ?? this.cantidad);
   }
 }
+
+/// Un producto que falta reponer en el anaquel, escaneado al recorrer
+/// el planograma. Queda guardado -sobrevive a cerrar la app, cambiar
+/// de pantalla, etc.- hasta que el usuario lo quita explícitamente
+/// (después de haberlo surtido), no es una lista de sesión que se
+/// pierde al salir de la pantalla.
+class FaltantePendiente {
+  const FaltantePendiente({
+    required this.sku,
+    required this.nombre,
+    this.imagenUrl,
+    required this.fechaAgregado,
+    this.cantidadDeposito,
+  });
+
+  final String sku;
+  final String nombre;
+  final String? imagenUrl;
+  final DateTime fechaAgregado;
+
+  /// Resuelto en el momento de listar (join con `productos`), no se
+  /// guarda una copia estática -así siempre refleja el dato de
+  /// depósito más reciente, aunque se haya actualizado después de
+  /// agregar este faltante a la lista-.
+  final int? cantidadDeposito;
+
+  factory FaltantePendiente.fromMap(Map<String, Object?> mapa) {
+    return FaltantePendiente(
+      sku: mapa['sku'] as String,
+      nombre: mapa['nombre'] as String,
+      imagenUrl: mapa['imagen_url'] as String?,
+      fechaAgregado: DateTime.fromMillisecondsSinceEpoch(mapa['fecha_agregado'] as int),
+      cantidadDeposito: mapa['cantidad_deposito'] as int?,
+    );
+  }
+
+  Map<String, Object?> toMap() {
+    return {
+      'sku': sku,
+      'nombre': nombre,
+      'imagen_url': imagenUrl,
+      'fecha_agregado': fechaAgregado.millisecondsSinceEpoch,
+    };
+  }
+}

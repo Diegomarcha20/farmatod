@@ -48,7 +48,7 @@ class InventarioHomeScreen extends StatelessWidget {
           _TarjetaModulo(
             icono: Icons.inventory_2_outlined,
             titulo: 'Faltantes y depósito',
-            descripcion: 'Escanea lo que falta en el anaquel y revisa si hay en depósito para reponer.',
+            descripcion: 'Recorre el planograma escaneando lo que falta; queda en tu lista de pendientes hasta que lo surtas.',
             color: AppColors.stockDisponible,
             onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const DepositoScreen())),
           ),

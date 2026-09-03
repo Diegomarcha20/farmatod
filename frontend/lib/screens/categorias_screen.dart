@@ -4,6 +4,7 @@ import 'package:google_fonts/google_fonts.dart';
 import '../main.dart';
 import '../models/inventario.dart';
 import '../services/inventory_db_service.dart';
+import '../services/notification_service.dart';
 
 /// Administra los tipos de producto y cuántos días antes de la fecha
 /// de vencimiento real hay que retirarlos del anaquel -cada tipo tiene
@@ -51,7 +52,10 @@ class _CategoriasScreenState extends State<CategoriasScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('¿Borrar categoría?'),
-        content: Text('Los productos con "${categoria.nombre}" se quedan sin categoría asignada.'),
+        content: Text(
+          'Los productos con "${categoria.nombre}" se quedan sin categoría asignada, y sus avisos '
+          'ya guardados se reprograman para avisar justo en la fecha de vencimiento (sin anticipación).',
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.of(context).pop(false), child: const Text('Cancelar')),
           TextButton(onPressed: () => Navigator.of(context).pop(true), child: const Text('Borrar')),
@@ -59,6 +63,18 @@ class _CategoriasScreenState extends State<CategoriasScreen> {
       ),
     );
     if (confirmar == true) {
+      // Antes de borrar la categoría, reprogramar los avisos de sus
+      // lotes -al perder la categoría pierden también sus días de
+      // anticipación, así que el aviso pasa a ser justo en la fecha
+      // de vencimiento en vez de quedarse en la fecha vieja-.
+      final lotes = await _db.listarLotesPorCategoria(categoria.id);
+      for (final item in lotes) {
+        await NotificationService.instancia.programarAvisoVencimiento(
+          id: item.lote.id,
+          nombreProducto: item.producto.nombre,
+          fecha: item.lote.fechaVencimiento,
+        );
+      }
       await _db.borrarCategoria(categoria.id);
       _cargar();
     }
@@ -203,7 +219,24 @@ class _FormularioCategoriaState extends State<_FormularioCategoria> {
       _guardando = true;
     });
 
-    await InventoryDbService.instancia.guardarCategoria(id: widget.categoria?.id, nombre: nombre, diasAnticipacion: dias);
+    final db = InventoryDbService.instancia;
+    final categoria = await db.guardarCategoria(id: widget.categoria?.id, nombre: nombre, diasAnticipacion: dias);
+
+    // Si se editaron los días de anticipación de una categoría que ya
+    // tenía lotes agregados, hay que reprogramar el aviso de cada uno
+    // con la nueva fecha de alerta -si no, quedarían avisando en la
+    // fecha vieja, calculada con el número de días anterior-.
+    if (widget.categoria != null && widget.categoria!.diasAnticipacion != dias) {
+      final lotes = await db.listarLotesPorCategoria(categoria.id);
+      for (final item in lotes) {
+        final nuevaAlerta = item.lote.fechaVencimiento.subtract(Duration(days: dias));
+        await NotificationService.instancia.programarAvisoVencimiento(
+          id: item.lote.id,
+          nombreProducto: item.producto.nombre,
+          fecha: nuevaAlerta,
+        );
+      }
+    }
 
     if (!mounted) return;
     Navigator.of(context).pop(true);
