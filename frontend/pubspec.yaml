@@ -1,7 +1,7 @@
 name: farmatod
-description: "App de consulta de stock, información médica y alternativas terapéuticas."
+description: "Consulta de stock y precios en tiempo real, mas inventario propio: vencimientos, deposito y conteo."
 publish_to: 'none'
-version: 1.0.0+1
+version: 1.1.0+2
 
 environment:
   sdk: '>=3.3.0 <4.0.0'
@@ -19,6 +19,9 @@ dependencies:
   path: ^1.9.1
   connectivity_plus: ^7.3.1
   shared_preferences: ^2.5.5
+  flutter_local_notifications: ^18.0.1
+  timezone: ^0.9.4
+  intl: ^0.19.0
 
 dev_dependencies:
   flutter_test:

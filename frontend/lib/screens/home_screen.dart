@@ -124,7 +124,8 @@ class _HomeScreenState extends State<HomeScreen> {
                       const SizedBox(height: 8),
                       Text(
                         'Consulta stock, información médica y alternativas '
-                        'terapéuticas al instante.',
+                        'terapéuticas al instante. Tu inventario -vencimientos, '
+                        'depósito y conteo- está en la pestaña Inventario.',
                         textAlign: TextAlign.center,
                         style: GoogleFonts.inter(
                           fontSize: 14,

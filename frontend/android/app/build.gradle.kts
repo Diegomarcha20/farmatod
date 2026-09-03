@@ -10,6 +10,12 @@ android {
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
+        // flutter_local_notifications (v10+) exige desugaring habilitado
+        // en el propio módulo de la app -no basta con que el plugin lo
+        // habilite en el suyo, Android Gradle Plugin lo exige también
+        // acá, según la documentación oficial del plugin- para poder
+        // programar notificaciones con compatibilidad hacia atrás.
+        isCoreLibraryDesugaringEnabled = true
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
@@ -23,6 +29,7 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        multiDexEnabled = true
     }
 
     buildTypes {
@@ -38,6 +45,12 @@ kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
     }
+}
+
+dependencies {
+    // Requerido junto con isCoreLibraryDesugaringEnabled arriba, por
+    // flutter_local_notifications (ver su README, sección "Gradle setup").
+    coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }
 
 flutter {

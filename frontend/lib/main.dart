@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:provider/provider.dart';
 
 import 'providers/rates_provider.dart';
 import 'providers/search_provider.dart';
-import 'screens/home_screen.dart';
+import 'screens/root_shell.dart';
 import 'services/api_service.dart';
 
 /// Paleta corporativa estricta de FarmaTod. No usar otros colores de
@@ -20,7 +21,11 @@ class AppColors {
   static const stockAgotado = Color(0xFFEF4444);
 }
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Necesario para que las fechas de vencimiento se muestren en
+  // español (ej. "5 mar 2026") en vez de en inglés.
+  await initializeDateFormatting('es');
   runApp(const FarmaTodApp());
 }
 
@@ -38,7 +43,7 @@ class FarmaTodApp extends StatelessWidget {
         title: 'FarmaTod',
         debugShowCheckedModeBanner: false,
         theme: _construirTema(),
-        home: const HomeScreen(),
+        home: const RootShell(),
       ),
     );
   }
