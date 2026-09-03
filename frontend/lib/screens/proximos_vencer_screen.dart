@@ -141,9 +141,13 @@ class _EncabezadoCategoria extends StatelessWidget {
       children: [
         Icon(Icons.category_outlined, size: 15, color: AppColors.primary.withValues(alpha: 0.5)),
         const SizedBox(width: 6),
-        Text(
-          nombre.toUpperCase(),
-          style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 0.4, color: AppColors.primary.withValues(alpha: 0.6)),
+        Flexible(
+          child: Text(
+            nombre.toUpperCase(),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 0.4, color: AppColors.primary.withValues(alpha: 0.6)),
+          ),
         ),
         const SizedBox(width: 8),
         Container(

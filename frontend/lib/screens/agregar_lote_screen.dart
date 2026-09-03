@@ -7,6 +7,7 @@ import '../models/inventario.dart';
 import '../services/api_service.dart';
 import '../services/inventory_db_service.dart';
 import '../services/notification_service.dart';
+import '../widgets/product_card.dart';
 import 'categorias_screen.dart';
 import 'scanner_screen.dart';
 
@@ -222,13 +223,8 @@ class _AgregarLoteScreenState extends State<AgregarLoteScreen> {
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      if (_imagenUrl != null) ...[
-                        ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: Image.network(_imagenUrl!, width: 48, height: 48, fit: BoxFit.cover),
-                        ),
-                        const SizedBox(width: 10),
-                      ],
+                      ProductoImagen(url: _imagenUrl, tamano: 48),
+                      const SizedBox(width: 10),
                       Expanded(
                         child: TextField(
                           controller: _nombreController,
@@ -268,7 +264,14 @@ class _AgregarLoteScreenState extends State<AgregarLoteScreen> {
                       style: GoogleFonts.inter(fontSize: 14, color: AppColors.primary),
                       decoration: const InputDecoration(labelText: 'Elige una categoría'),
                       items: _categorias
-                          .map((c) => DropdownMenuItem(value: c.id, child: Text('${c.nombre} (${c.diasAnticipacion} días antes)')))
+                          .map((c) => DropdownMenuItem(
+                                value: c.id,
+                                child: Text(
+                                  '${c.nombre} (${c.diasAnticipacion} días antes)',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ))
                           .toList(),
                       onChanged: (valor) => setState(() => _categoriaId = valor),
                     ),
@@ -281,13 +284,28 @@ class _AgregarLoteScreenState extends State<AgregarLoteScreen> {
                   Row(
                     children: [
                       Expanded(
-                        child: OutlinedButton.icon(
+                        // OutlinedButton.icon no le da ancho acotado a su
+                        // label automáticamente por estar dentro de un
+                        // Expanded -se arma el botón a mano con Flexible +
+                        // ellipsis para que nunca desborde en pantallas
+                        // angostas, junto al campo de cantidad al lado-.
+                        child: OutlinedButton(
                           onPressed: _elegirFecha,
-                          icon: const Icon(Icons.event_outlined),
-                          label: Text(
-                            _fechaVencimiento == null
-                                ? 'Elegir fecha de vencimiento'
-                                : DateFormat('d MMM yyyy', 'es').format(_fechaVencimiento!),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.event_outlined, size: 18),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  _fechaVencimiento == null
+                                      ? 'Elegir fecha'
+                                      : DateFormat('d MMM yyyy', 'es').format(_fechaVencimiento!),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ),

@@ -241,8 +241,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
                             child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.wifi_tethering_rounded),
-                    label: Text(_probando ? 'Probando... (puede tardar si el servidor está dormido)' : 'Probar conexión'),
+                    // Texto del botón siempre corto -antes tenía la
+                    // explicación completa adentro, que en pantallas
+                    // angostas hacía que el botón se viera enorme, partido
+                    // en dos líneas-; la explicación va aparte, debajo.
+                    label: Text(_probando ? 'Probando...' : 'Probar conexión'),
                   ),
+                  if (_probando) ...[
+                    const SizedBox(height: 6),
+                    Text(
+                      'Puede tardar si el servidor está dormido.',
+                      style: GoogleFonts.inter(fontSize: 11.5, color: AppColors.primary.withValues(alpha: 0.5)),
+                    ),
+                  ],
                   const SizedBox(height: 12),
                   SizedBox(
                     width: double.infinity,
@@ -450,15 +461,15 @@ class _TarjetaFilaTasa extends StatelessWidget {
               items: const [
                 DropdownMenuItem(
                   value: ModoTasa.dividirBs,
-                  child: Text('÷ Bs. por unidad (estándar, ej. USD)'),
+                  child: Text('÷ Bs. por unidad (estándar, ej. USD)', maxLines: 1, overflow: TextOverflow.ellipsis),
                 ),
                 DropdownMenuItem(
                   value: ModoTasa.multiplicarBs,
-                  child: Text('× unidades por Bs.'),
+                  child: Text('× unidades por Bs.', maxLines: 1, overflow: TextOverflow.ellipsis),
                 ),
                 DropdownMenuItem(
                   value: ModoTasa.multiplicarUsd,
-                  child: Text('× unidades por USD (ej. peso colombiano)'),
+                  child: Text('× unidades por USD (ej. peso colombiano)', maxLines: 1, overflow: TextOverflow.ellipsis),
                 ),
               ],
               onChanged: (nuevoModo) {

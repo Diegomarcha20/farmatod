@@ -284,11 +284,15 @@ class _TarjetaFaltante extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
+            // Wrap en vez de Row: en pantallas angostas, estos dos
+            // botones combinados pueden no caber en una sola línea -así
+            // pasan a la siguiente en vez de desbordar-.
+            Wrap(
+              alignment: WrapAlignment.end,
+              spacing: 4,
+              runSpacing: 4,
               children: [
                 TextButton(onPressed: onRegistrar, child: const Text('Actualizar depósito')),
-                const SizedBox(width: 4),
                 TextButton.icon(
                   onPressed: onSurtido,
                   icon: const Icon(Icons.check_circle_outline, size: 18),
